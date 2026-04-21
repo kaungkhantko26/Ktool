@@ -40,6 +40,20 @@ ktool smtp-check mail.example.com --port 587 --starttls --yes-i-am-authorized
 ktool setoolkit-info
 ```
 
+Pentester workflow:
+
+```bash
+ktool scope add --target example.com --note "authorized target"
+ktool scope check --target https://example.com
+ktool evidence-init example.com
+ktool checklist web
+ktool finding-new --title "Missing DMARC" --severity medium --asset example.com --evidence "No DMARC record" --impact "Email spoofing risk" --remediation "Publish DMARC and move toward enforcement"
+ktool report-init --client "Client Name" --target example.com --output engagements/example.com/reports/report.md
+ktool report-export --client "Client Name" --target example.com --findings-dir findings --output reports/ktool-report.md
+ktool recon-workflow example.com --yes-i-am-authorized
+ktool web-workflow https://example.com --yes-i-am-authorized
+```
+
 External tool wrappers:
 
 ```bash

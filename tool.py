@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import email.utils
+import fnmatch
 import ipaddress
 import json
 import os
@@ -119,6 +120,40 @@ SECURITY_HEADERS = {
     "X-Content-Type-Options": "Helps prevent MIME-sniffing issues.",
     "Referrer-Policy": "Limits sensitive URL data in referrers.",
     "Permissions-Policy": "Restricts powerful browser features.",
+}
+
+CHECKLISTS = {
+    "web": [
+        "Confirm written authorization and exact in-scope URLs.",
+        "Capture screenshots and timestamps for each finding.",
+        "Review security headers and cookie flags.",
+        "Check common exposed paths and backup/config files.",
+        "Fingerprint frameworks and server technologies.",
+        "Review public JavaScript files and source maps.",
+        "Run TLS checks and note weak protocol/cipher issues.",
+        "Validate findings manually before reporting.",
+    ],
+    "network": [
+        "Confirm in-scope IP ranges and maintenance windows.",
+        "Run conservative port and service discovery.",
+        "Record service versions and exposed management ports.",
+        "Check SMB/SNMP only when explicitly in scope.",
+        "Collect packet captures only on owned/administered networks.",
+        "Document firewall/VPN observations and access assumptions.",
+    ],
+    "email": [
+        "Check MX, SPF, DMARC, and DKIM selector records.",
+        "Review SMTP STARTTLS support and public banner exposure.",
+        "Do not verify mailbox existence or send unsolicited messages.",
+        "Document spoofing risk based on DNS controls.",
+    ],
+    "report": [
+        "Each finding has title, severity, affected asset, evidence, impact, remediation, and references.",
+        "Evidence is reproducible and sanitized.",
+        "Risk ratings are consistent across findings.",
+        "Recommendations are practical and specific.",
+        "Scope, limitations, timeline, and authorization notes are included.",
+    ],
 }
 
 TOOL_NAME = "Ktool"
@@ -303,6 +338,12 @@ TOOL_CATEGORIES = {
         "skills": ["Email format review", "MX/SPF/DMARC/DKIM checks", "SMTP banner and TLS capability review"],
         "tools": ["dig", "host", "nslookup", "swaks", "checkdmarc"],
         "implemented": ["email-check", "email-domain", "smtp-check"],
+    },
+    "pentest": {
+        "title": "Pentest Workflow",
+        "skills": ["Scope control", "Evidence management", "Finding documentation", "Report preparation"],
+        "tools": ["Ktool"],
+        "implemented": ["scope", "evidence-init", "finding-new", "report-init", "report-export", "checklist", "recon-workflow", "web-workflow"],
     },
     "passwords": {
         "title": "Password Security Testing",
@@ -2793,6 +2834,329 @@ def check_tools(categories: list[str] | None = None) -> dict[str, list[dict[str,
     return report
 
 
+def slugify(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip().lower()).strip("-")
+    return slug or "ktool-engagement"
+
+
+def ktool_dir() -> Path:
+    path = Path(".ktool")
+    path.mkdir(exist_ok=True)
+    return path
+
+
+def scope_file_path(path: str | None = None) -> Path:
+    return Path(path) if path else ktool_dir() / "scope.json"
+
+
+def load_scope(path: str | None = None) -> dict[str, object]:
+    scope_path = scope_file_path(path)
+    if not scope_path.exists():
+        return {"targets": [], "created_at": datetime.now(timezone.utc).isoformat()}
+    return json.loads(scope_path.read_text(encoding="utf-8"))
+
+
+def save_scope_data(data: dict[str, object], path: str | None = None) -> Path:
+    scope_path = scope_file_path(path)
+    scope_path.parent.mkdir(parents=True, exist_ok=True)
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    scope_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return scope_path
+
+
+def target_identifier(value: str) -> str:
+    if "://" in value:
+        host = host_from_url_or_host(value)
+        return host.lower().strip(".")
+    return value.lower().strip().strip(".")
+
+
+def target_in_scope(target: str, entries: list[dict[str, object]]) -> tuple[bool, dict[str, object] | None]:
+    normalized = target_identifier(target)
+    for entry in entries:
+        pattern = str(entry.get("target", "")).lower().strip().strip(".")
+        if not pattern:
+            continue
+        if pattern.startswith("*.") and normalized.endswith(pattern[1:]):
+            return True, entry
+        if fnmatch.fnmatch(normalized, pattern):
+            return True, entry
+        if normalized == pattern:
+            return True, entry
+    return False, None
+
+
+def scope_manager(action: str, target: str | None, note: str | None, path: str | None) -> dict[str, object]:
+    data = load_scope(path)
+    entries = list(data.get("targets", []))
+
+    if action == "add":
+        if not target:
+            raise ValueError("scope add requires --target.")
+        normalized = target_identifier(target)
+        in_scope, _ = target_in_scope(normalized, entries)
+        if not in_scope:
+            entries.append(
+                {
+                    "target": normalized,
+                    "note": note or "",
+                    "added_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            data["targets"] = entries
+            saved = save_scope_data(data, path)
+            print(f"[+] Added scope target: {normalized}")
+            print(f"[+] Scope saved to {saved}")
+        else:
+            print(f"[i] Scope target already covered: {normalized}")
+    elif action == "list":
+        print("\n[+] Ktool scope targets")
+        if not entries:
+            print("  No scope targets saved yet.")
+        for entry in entries:
+            note_text = f" - {entry.get('note')}" if entry.get("note") else ""
+            print(f"  - {entry.get('target')}{note_text}")
+    elif action == "check":
+        if not target:
+            raise ValueError("scope check requires --target.")
+        in_scope, match = target_in_scope(target, entries)
+        status = "IN SCOPE" if in_scope else "OUT OF SCOPE"
+        print(f"[{status}] {target_identifier(target)}")
+        if match:
+            print(f"Matched: {match.get('target')}")
+    elif action == "remove":
+        if not target:
+            raise ValueError("scope remove requires --target.")
+        normalized = target_identifier(target)
+        remaining = [entry for entry in entries if str(entry.get("target")) != normalized]
+        data["targets"] = remaining
+        saved = save_scope_data(data, path)
+        print(f"[+] Removed {len(entries) - len(remaining)} scope entry for {normalized}")
+        print(f"[+] Scope saved to {saved}")
+    elif action == "clear":
+        data["targets"] = []
+        saved = save_scope_data(data, path)
+        print(f"[+] Cleared scope file: {saved}")
+    else:
+        raise ValueError(f"Unsupported scope action: {action}")
+
+    return data
+
+
+def ensure_target_in_scope_or_warn(target: str, scope_path: str | None) -> dict[str, object]:
+    data = load_scope(scope_path)
+    entries = list(data.get("targets", []))
+    if not entries:
+        print("[i] No .ktool/scope.json entries found. Document scope with: ktool scope add --target <target>")
+        return {"configured": False, "in_scope": None}
+    in_scope, match = target_in_scope(target, entries)
+    if in_scope:
+        print(f"[scope] {target_identifier(target)} matched {match.get('target')}")
+    else:
+        print(f"[WARN] {target_identifier(target)} does not match saved Ktool scope. Confirm authorization before continuing.")
+    return {"configured": True, "in_scope": in_scope, "match": match}
+
+
+def evidence_init(target: str, base_dir: str) -> dict[str, object]:
+    normalized = target_identifier(target)
+    root = Path(base_dir) / slugify(normalized)
+    folders = ["evidence", "screenshots", "scans", "notes", "reports", "findings"]
+    for folder in folders:
+        (root / folder).mkdir(parents=True, exist_ok=True)
+    readme = root / "README.md"
+    if not readme.exists():
+        readme.write_text(
+            f"# Ktool Evidence: {normalized}\n\n"
+            "Use this folder for authorized assessment evidence only.\n\n"
+            "- `evidence/`: raw proof files\n"
+            "- `screenshots/`: visual evidence\n"
+            "- `scans/`: scan output\n"
+            "- `notes/`: working notes\n"
+            "- `findings/`: finding JSON files\n"
+            "- `reports/`: exported reports\n",
+            encoding="utf-8",
+        )
+    print(f"[+] Evidence workspace created: {root}")
+    return {"target": normalized, "root": str(root), "folders": folders}
+
+
+def checklist(category: str) -> dict[str, object]:
+    if category not in CHECKLISTS:
+        raise ValueError(f"Unknown checklist: {category}")
+    print(f"\n[+] Ktool {category} checklist")
+    for index, item in enumerate(CHECKLISTS[category], start=1):
+        print(f"[ ] {index}. {item}")
+    return {"category": category, "items": CHECKLISTS[category]}
+
+
+def finding_new(
+    title: str,
+    severity: str,
+    asset: str,
+    evidence: str,
+    impact: str,
+    remediation: str,
+    references: str,
+    output_dir: str,
+) -> dict[str, object]:
+    finding = {
+        "id": f"KT-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+        "title": title,
+        "severity": severity,
+        "asset": asset,
+        "evidence": evidence,
+        "impact": impact,
+        "remediation": remediation,
+        "references": [item.strip() for item in references.split(",") if item.strip()],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"{finding['id']}-{slugify(title)}.json"
+    path.write_text(json.dumps(finding, indent=2), encoding="utf-8")
+    print(f"[+] Finding saved: {path}")
+    return {"path": str(path), "finding": finding}
+
+
+def report_init(client: str, target: str, output: str) -> dict[str, object]:
+    path = Path(output)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        raise ValueError(f"Report already exists: {path}")
+    content = (
+        f"# Ktool Pentest Report - {client}\n\n"
+        "## Scope\n\n"
+        f"- Target: {target}\n"
+        "- Authorization: Documented by tester/client.\n\n"
+        "## Executive Summary\n\n"
+        "Write a concise business-risk summary here.\n\n"
+        "## Methodology\n\n"
+        "- Reconnaissance\n"
+        "- Web and network validation\n"
+        "- Evidence review\n"
+        "- Remediation guidance\n\n"
+        "## Findings\n\n"
+        "Export findings with `ktool report-export` or add them manually.\n\n"
+        "## Limitations\n\n"
+        "Document testing windows, unavailable systems, and excluded techniques.\n"
+    )
+    path.write_text(content, encoding="utf-8")
+    print(f"[+] Report template created: {path}")
+    return {"path": str(path), "client": client, "target": target}
+
+
+def load_finding_files(findings_dir: str) -> list[dict[str, object]]:
+    findings: list[dict[str, object]] = []
+    for path in sorted(Path(findings_dir).glob("*.json")):
+        try:
+            item = json.loads(path.read_text(encoding="utf-8"))
+            item["_path"] = str(path)
+            findings.append(item)
+        except json.JSONDecodeError:
+            print(f"[WARN] Skipping invalid finding JSON: {path}")
+    return findings
+
+
+def report_export(client: str, target: str, findings_dir: str, output: str) -> dict[str, object]:
+    findings = load_finding_files(findings_dir)
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+    findings.sort(key=lambda item: severity_order.get(str(item.get("severity", "info")).lower(), 9))
+
+    lines = [
+        f"# Ktool Pentest Report - {client}",
+        "",
+        "## Scope",
+        "",
+        f"- Target: {target}",
+        "- Authorization: Documented by tester/client.",
+        "",
+        "## Findings Summary",
+        "",
+    ]
+    if findings:
+        for finding in findings:
+            lines.append(f"- {finding.get('severity', 'info').upper()}: {finding.get('title', 'Untitled')} ({finding.get('asset', target)})")
+    else:
+        lines.append("- No finding JSON files were found.")
+
+    lines.extend(["", "## Detailed Findings", ""])
+    for finding in findings:
+        lines.extend(
+            [
+                f"### {finding.get('title', 'Untitled')}",
+                "",
+                f"- ID: {finding.get('id', 'N/A')}",
+                f"- Severity: {finding.get('severity', 'info')}",
+                f"- Asset: {finding.get('asset', target)}",
+                "",
+                "Evidence:",
+                "",
+                str(finding.get("evidence", "")),
+                "",
+                "Impact:",
+                "",
+                str(finding.get("impact", "")),
+                "",
+                "Remediation:",
+                "",
+                str(finding.get("remediation", "")),
+                "",
+            ]
+        )
+        refs = finding.get("references", [])
+        if refs:
+            lines.append("References:")
+            lines.append("")
+            for ref in refs:
+                lines.append(f"- {ref}")
+            lines.append("")
+
+    path = Path(output)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    print(f"[+] Report exported: {path}")
+    return {"path": str(path), "findings": findings}
+
+
+def recon_workflow(domain: str, timeout: float, scope_path: str | None) -> dict[str, object]:
+    domain = validate_host(domain).strip(".")
+    scope = ensure_target_in_scope_or_warn(domain, scope_path)
+    print(f"\n[+] Ktool recon workflow for {domain}")
+    results: dict[str, object] = {"target": domain, "scope": scope}
+    results["dns"] = resolve_dns(domain)
+    try:
+        results["whois"] = whois_lookup(domain, timeout=timeout)
+    except (ValueError, TimeoutError, OSError) as error:
+        print(f"[WARN] WHOIS skipped: {error}")
+        results["whois"] = {"error": str(error)}
+    results["subdomains"] = [asdict(item) for item in subdomain_finder(domain, DEFAULT_SUBDOMAINS)]
+    results["email"] = email_domain_audit(domain, dkim_selector=None, timeout=timeout, use_checkdmarc=False)
+    results["passive_assets"] = run_passive_assets(domain, tools=["subfinder", "assetfinder", "amass"], timeout=timeout)
+    return results
+
+
+def web_workflow(url: str, timeout: float, delay: float, scope_path: str | None) -> dict[str, object]:
+    normalized = normalize_url(url)
+    scope = ensure_target_in_scope_or_warn(normalized, scope_path)
+    host = host_from_url_or_host(normalized)
+    print(f"\n[+] Ktool web workflow for {normalized}")
+    results: dict[str, object] = {"url": normalized, "scope": scope}
+    results["baseline"] = web_baseline(normalized, timeout=timeout, delay=delay)
+    results["fingerprint"] = run_fingerprint(normalized, tools=["whatweb", "wafw00f", "httpx"], timeout=timeout)
+    results["tls"] = run_tls_audit(normalized, tools=["testssl.sh", "sslscan"], timeout=max(timeout, 60.0))
+    results["js"] = run_javascript_audit(normalized, tools=[], timeout=max(timeout, 30.0), browser=False, output=None)
+    results["vuln_search"] = web_vulnerability_search(
+        normalized,
+        timeout=timeout,
+        delay=delay,
+        use_searchsploit=True,
+        use_nikto=False,
+        nikto_timeout=timeout,
+    )
+    results["email"] = email_domain_audit(host, dkim_selector=None, timeout=timeout, use_checkdmarc=False)
+    return results
+
+
 def print_roadmap(category: str | None = None) -> dict[str, object]:
     selected_keys = [category] if category else list(TOOL_CATEGORIES)
     unknown = [key for key in selected_keys if key not in TOOL_CATEGORIES]
@@ -2922,6 +3286,59 @@ def build_parser() -> argparse.ArgumentParser:
     )
     install_parser.add_argument("--timeout", type=float, default=1800.0, help="Install timeout in seconds.")
     install_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    scope_parser = subparsers.add_parser("scope", help="Manage authorized assessment scope targets.")
+    scope_parser.add_argument("action", choices=["add", "list", "check", "remove", "clear"], help="Scope action.")
+    scope_parser.add_argument("--target", help="Target, wildcard, domain, IP, or URL.")
+    scope_parser.add_argument("--note", help="Optional scope note.")
+    scope_parser.add_argument("--scope-file", help="Scope JSON path. Defaults to .ktool/scope.json.")
+    scope_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    evidence_parser = subparsers.add_parser("evidence-init", help="Create a pentest evidence workspace.")
+    evidence_parser.add_argument("target", help="Target name/domain/IP for the workspace.")
+    evidence_parser.add_argument("--base-dir", default="engagements", help="Base directory for engagement folders.")
+    evidence_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    checklist_parser = subparsers.add_parser("checklist", help="Print a pentest checklist.")
+    checklist_parser.add_argument("category", choices=sorted(CHECKLISTS), help="Checklist category.")
+    checklist_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    finding_parser = subparsers.add_parser("finding-new", help="Create a finding JSON template.")
+    finding_parser.add_argument("--title", required=True, help="Finding title.")
+    finding_parser.add_argument("--severity", choices=["critical", "high", "medium", "low", "info"], default="medium")
+    finding_parser.add_argument("--asset", required=True, help="Affected asset.")
+    finding_parser.add_argument("--evidence", default="", help="Evidence summary or file reference.")
+    finding_parser.add_argument("--impact", default="", help="Impact summary.")
+    finding_parser.add_argument("--remediation", default="", help="Remediation guidance.")
+    finding_parser.add_argument("--references", default="", help="Comma-separated references.")
+    finding_parser.add_argument("--output-dir", default="findings", help="Directory for finding JSON files.")
+    finding_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    report_init_parser = subparsers.add_parser("report-init", help="Create a Markdown pentest report template.")
+    report_init_parser.add_argument("--client", required=True, help="Client or engagement name.")
+    report_init_parser.add_argument("--target", required=True, help="Assessment target or scope summary.")
+    report_init_parser.add_argument("--output", default="reports/ktool-report.md", help="Report path.")
+    report_init_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    report_export_parser = subparsers.add_parser("report-export", help="Export finding JSON files to a Markdown report.")
+    report_export_parser.add_argument("--client", required=True, help="Client or engagement name.")
+    report_export_parser.add_argument("--target", required=True, help="Assessment target or scope summary.")
+    report_export_parser.add_argument("--findings-dir", default="findings", help="Directory containing finding JSON files.")
+    report_export_parser.add_argument("--output", default="reports/ktool-report.md", help="Output Markdown report path.")
+    report_export_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    recon_workflow_parser = subparsers.add_parser("recon-workflow", help="Run a safe reconnaissance workflow.")
+    add_common_run_options(recon_workflow_parser)
+    recon_workflow_parser.add_argument("domain", help="Domain to assess.")
+    recon_workflow_parser.add_argument("--timeout", type=float, default=30.0, help="Per-step timeout in seconds.")
+    recon_workflow_parser.add_argument("--scope-file", help="Scope JSON path. Defaults to .ktool/scope.json.")
+
+    web_workflow_parser = subparsers.add_parser("web-workflow", help="Run a safe web assessment workflow.")
+    add_common_run_options(web_workflow_parser)
+    web_workflow_parser.add_argument("url", help="Base URL to assess.")
+    web_workflow_parser.add_argument("--timeout", type=float, default=15.0, help="Per-step timeout in seconds.")
+    web_workflow_parser.add_argument("--delay", type=float, default=0.2, help="Delay between path requests.")
+    web_workflow_parser.add_argument("--scope-file", help="Scope JSON path. Defaults to .ktool/scope.json.")
 
     dns_parser = subparsers.add_parser("dns", help="Resolve DNS information for a host.")
     add_common_run_options(dns_parser)
@@ -3324,6 +3741,32 @@ def main(argv: list[str] | None = None) -> int:
                 execute=args.execute,
                 timeout=args.timeout,
             )
+        elif args.command == "scope":
+            results = scope_manager(args.action, target=args.target, note=args.note, path=args.scope_file)
+        elif args.command == "evidence-init":
+            results = evidence_init(args.target, base_dir=args.base_dir)
+        elif args.command == "checklist":
+            results = checklist(args.category)
+        elif args.command == "finding-new":
+            results = finding_new(
+                title=args.title,
+                severity=args.severity,
+                asset=args.asset,
+                evidence=args.evidence,
+                impact=args.impact,
+                remediation=args.remediation,
+                references=args.references,
+                output_dir=args.output_dir,
+            )
+        elif args.command == "report-init":
+            results = report_init(args.client, target=args.target, output=args.output)
+        elif args.command == "report-export":
+            results = report_export(
+                args.client,
+                target=args.target,
+                findings_dir=args.findings_dir,
+                output=args.output,
+            )
         elif args.command == "password-audit":
             results = password_audit(
                 args.file,
@@ -3349,6 +3792,10 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "dns":
             results = resolve_dns(args.domain)
+        elif args.command == "recon-workflow":
+            results = recon_workflow(args.domain, timeout=args.timeout, scope_path=args.scope_file)
+        elif args.command == "web-workflow":
+            results = web_workflow(args.url, timeout=args.timeout, delay=args.delay, scope_path=args.scope_file)
         elif args.command == "email-check":
             results = email_address_check(
                 args.address,
@@ -3488,6 +3935,12 @@ def main(argv: list[str] | None = None) -> int:
             "tools",
             "install-hints",
             "install-tools",
+            "scope",
+            "evidence-init",
+            "checklist",
+            "finding-new",
+            "report-init",
+            "report-export",
             "password-audit",
             "awareness-plan",
             "setoolkit-info",
