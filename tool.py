@@ -134,6 +134,15 @@ def color(text: str, code: str) -> str:
     return f"\033[{code}m{text}\033[0m"
 
 
+def clear_screen() -> None:
+    if os.name == "nt":
+        subprocess.run(["cmd", "/c", "cls"], check=False)
+    elif sys.stdout.isatty():
+        print("\033[2J\033[H", end="")
+    else:
+        print()
+
+
 def print_exit_screen(reason: str = "Session closed", exit_code: int = 0) -> None:
     title = "Ktool Security Console"
     lines = [
@@ -196,7 +205,10 @@ def print_menu_panel() -> None:
         ("16", "Local Posture Review"),
         ("17", "Install Hints"),
         ("18", "Web Vulnerability Search"),
-        ("19", "Exit"),
+        ("19", "SEToolkit Info"),
+        ("20", "Clear Screen"),
+        ("21", "Restart Console"),
+        ("22", "Exit"),
     ]
     width = 45
     border = "+" + "-" * width + "+"
@@ -316,6 +328,12 @@ INSTALL_HINTS = {
         "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install network-manager",
         "Arch": "sudo pacman -S networkmanager",
         "Fedora": "sudo dnf install NetworkManager",
+    },
+    "setoolkit": {
+        "Kali": "sudo apt update && sudo apt install set",
+        "GitHub": "git clone https://github.com/trustedsec/social-engineer-toolkit",
+        "Manual setup": "cd social-engineer-toolkit && sudo pip3 install -r requirements.txt && sudo python3 setup.py",
+        "Safety": "Use only for approved awareness training in isolated labs. Ktool does not run SET attack modules.",
     },
 }
 
@@ -784,6 +802,21 @@ def run_nikto(url: str, timeout: float) -> dict[str, object]:
     }
 
 
+def run_nikto_with_timeout(url: str, timeout: float) -> dict[str, object]:
+    try:
+        return run_nikto(url, timeout=timeout)
+    except TimeoutError as error:
+        message = str(error)
+        print(f"[WARN] {message}")
+        print("[i] Increase --nikto-timeout for deeper scans, or run without --nikto for faster checks.")
+        return {
+            "installed": True,
+            "timed_out": True,
+            "timeout_seconds": timeout,
+            "error": message,
+        }
+
+
 def web_vulnerability_search(
     url: str,
     timeout: float,
@@ -851,7 +884,7 @@ def web_vulnerability_search(
 
     nikto_result: dict[str, object] | None = None
     if use_nikto:
-        nikto_result = run_nikto(normalized, timeout=nikto_timeout)
+        nikto_result = run_nikto_with_timeout(normalized, timeout=nikto_timeout)
 
     return {
         "url": normalized,
@@ -1199,6 +1232,40 @@ def awareness_plan(company_name: str, audience: str) -> dict[str, object]:
     return plan
 
 
+def setoolkit_info() -> dict[str, object]:
+    path = find_tool("setoolkit")
+    installed = path is not None
+    print("\n[+] SEToolkit awareness support")
+    print("[i] Ktool does not launch SET attack modules, credential harvesters, or phishing pages.")
+    print("[i] Use SET only in approved training labs with written authorization.")
+    if installed:
+        print(f"[installed] setoolkit -> {path}")
+    else:
+        print("[missing] setoolkit")
+        print()
+        print(install_hint_text("setoolkit"))
+
+    workflow = [
+        "Define written training scope and audience.",
+        "Use sanitized examples and controlled lab infrastructure.",
+        "Do not collect real credentials.",
+        "Measure training with reporting drills, quizzes, and debriefs.",
+        "Document authorization, schedule, and success criteria.",
+    ]
+    print("\nSafe awareness workflow:")
+    for item in workflow:
+        print(f"  - {item}")
+
+    return {
+        "tool": "setoolkit",
+        "installed": installed,
+        "path": path,
+        "github": "https://github.com/trustedsec/social-engineer-toolkit",
+        "install_hints": INSTALL_HINTS["setoolkit"],
+        "safe_workflow": workflow,
+    }
+
+
 def local_posture() -> dict[str, object]:
     print("\n[+] Local privilege-risk posture review")
     print("[i] This is defensive inventory for your own Linux host; it does not attempt privilege escalation.")
@@ -1468,7 +1535,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run Nikto if installed. This is an active scanner.",
     )
-    web_vuln_parser.add_argument("--nikto-timeout", type=float, default=180.0, help="Nikto timeout in seconds.")
+    web_vuln_parser.add_argument("--nikto-timeout", type=float, default=900.0, help="Nikto timeout in seconds.")
 
     nmap_parser = subparsers.add_parser("nmap", help="Run a conservative nmap service scan.")
     add_common_run_options(nmap_parser)
@@ -1508,8 +1575,15 @@ def build_parser() -> argparse.ArgumentParser:
     awareness_parser.add_argument("--audience", default="employees", help="Audience name.")
     awareness_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
+    setoolkit_parser = subparsers.add_parser("setoolkit-info", help="Show safe SEToolkit GitHub/install guidance.")
+    setoolkit_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
     posture_parser = subparsers.add_parser("local-posture", help="Run local defensive privilege-risk checks.")
     posture_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    subparsers.add_parser("clear", help="Clear the terminal screen.")
+    subparsers.add_parser("restart", help="Start the interactive Ktool console.")
+    subparsers.add_parser("Ktool", help="Start the interactive Ktool console.")
 
     return parser
 
@@ -1605,13 +1679,34 @@ def interactive_menu() -> None:
                     delay=0.2,
                     use_searchsploit=True,
                     use_nikto=use_nikto,
-                    nikto_timeout=180.0,
+                    nikto_timeout=900.0,
                 )
             elif choice == "19":
+                setoolkit_info()
+            elif choice == "20":
+                clear_screen()
+                print_startup_banner()
+            elif choice == "21":
+                clear_screen()
+                print_startup_banner()
+                print(color("[restarted] Ktool console restarted.", "1;32"))
+            elif choice == "22":
                 print_exit_screen("Session closed from the interactive menu.", 0)
                 break
             else:
-                print("Invalid choice.")
+                command = choice.lower()
+                if command == "clear":
+                    clear_screen()
+                    print_startup_banner()
+                elif command in {"restart", "ktool"}:
+                    clear_screen()
+                    print_startup_banner()
+                    print(color("[restarted] Ktool console restarted.", "1;32"))
+                elif command in {"exit", "quit"}:
+                    print_exit_screen("Session closed from the interactive menu.", 0)
+                    break
+                else:
+                    print("Invalid choice.")
         except (ValueError, OSError, ConnectionError, TimeoutError) as error:
             print(f"[ERROR] {error}")
 
@@ -1621,8 +1716,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        if not args.command:
+        if not args.command or args.command in {"restart", "Ktool"}:
             interactive_menu()
+            return 0
+        if args.command == "clear":
+            clear_screen()
             return 0
 
         if args.command == "roadmap":
@@ -1643,6 +1741,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "awareness-plan":
             results = awareness_plan(args.company, args.audience)
+        elif args.command == "setoolkit-info":
+            results = setoolkit_info()
         elif args.command == "local-posture":
             results = local_posture()
         else:
@@ -1703,7 +1803,15 @@ def main(argv: list[str] | None = None) -> int:
             results = wireless_info()
         elif args.command == "vuln-lookup":
             results = vuln_lookup(args.query, timeout=args.timeout)
-        elif args.command in {"roadmap", "tools", "install-hints", "password-audit", "awareness-plan", "local-posture"}:
+        elif args.command in {
+            "roadmap",
+            "tools",
+            "install-hints",
+            "password-audit",
+            "awareness-plan",
+            "setoolkit-info",
+            "local-posture",
+        }:
             pass
         else:
             parser.error(f"Unknown command: {args.command}")
