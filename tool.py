@@ -370,6 +370,12 @@ TOOL_CATEGORIES = {
         "tools": ["aircrack-ng", "airodump-ng", "kismet", "iw", "nmcli", "ip"],
         "implemented": ["wireless-info", "wifi-check", "wifi-scan", "tools"],
     },
+    "mobile": {
+        "title": "Mobile and iPhone Checks",
+        "skills": ["iPhone WiFi reachability", "Bonjour/mDNS discovery", "Trusted USB device health inventory"],
+        "tools": ["ping", "ip", "avahi-browse", "ideviceinfo", "idevice_id", "idevicepair", "usbmuxd"],
+        "implemented": ["iphone-check", "iphone-usb-info", "iphone-health-guide"],
+    },
     "exploitation": {
         "title": "Exploitation Research",
         "skills": ["Lab validation", "Vulnerability research", "Patch verification"],
@@ -416,6 +422,12 @@ TOOL_ALIASES = {
     "wg": ["wg"],
     "openvpn": ["openvpn"],
     "tor": ["tor"],
+    "ping": ["ping"],
+    "avahi-browse": ["avahi-browse"],
+    "ideviceinfo": ["ideviceinfo"],
+    "idevice_id": ["idevice_id"],
+    "idevicepair": ["idevicepair"],
+    "usbmuxd": ["usbmuxd"],
     "retire": ["retire"],
     "trufflehog": ["trufflehog"],
     "semgrep": ["semgrep"],
@@ -493,6 +505,37 @@ INSTALL_HINTS = {
         "Arch": "sudo pacman -S tor",
         "Fedora": "sudo dnf install tor",
         "Safety": "Use Tor for lawful privacy. Ktool does not route scans or attacks through Tor.",
+    },
+    "ping": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install iputils-ping",
+        "Arch": "sudo pacman -S iputils",
+        "Fedora": "sudo dnf install iputils",
+    },
+    "avahi-browse": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install avahi-utils",
+        "Arch": "sudo pacman -S avahi",
+        "Fedora": "sudo dnf install avahi-tools",
+    },
+    "ideviceinfo": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install libimobiledevice-utils usbmuxd",
+        "Arch": "sudo pacman -S libimobiledevice usbmuxd",
+        "Fedora": "sudo dnf install libimobiledevice-utils usbmuxd",
+        "Safety": "Requires a trusted/unlocked iPhone pairing. Ktool does not bypass device locks or pairing.",
+    },
+    "idevice_id": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install libimobiledevice-utils usbmuxd",
+        "Arch": "sudo pacman -S libimobiledevice usbmuxd",
+        "Fedora": "sudo dnf install libimobiledevice-utils usbmuxd",
+    },
+    "idevicepair": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install libimobiledevice-utils usbmuxd",
+        "Arch": "sudo pacman -S libimobiledevice usbmuxd",
+        "Fedora": "sudo dnf install libimobiledevice-utils usbmuxd",
+    },
+    "usbmuxd": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install usbmuxd",
+        "Arch": "sudo pacman -S usbmuxd",
+        "Fedora": "sudo dnf install usbmuxd",
     },
     "setoolkit": {
         "Kali": "sudo apt update && sudo apt install set",
@@ -772,6 +815,12 @@ INSTALL_PACKAGES = {
         "wg": "wireguard-tools",
         "openvpn": "openvpn",
         "tor": "tor",
+        "ping": "iputils-ping",
+        "avahi-browse": "avahi-utils",
+        "ideviceinfo": "libimobiledevice-utils",
+        "idevice_id": "libimobiledevice-utils",
+        "idevicepair": "libimobiledevice-utils",
+        "usbmuxd": "usbmuxd",
         "searchsploit": "exploitdb",
         "masscan": "masscan",
         "nc": "netcat-openbsd",
@@ -825,6 +874,12 @@ INSTALL_PACKAGES = {
         "wg": "wireguard-tools",
         "openvpn": "openvpn",
         "tor": "tor",
+        "ping": "iputils",
+        "avahi-browse": "avahi",
+        "ideviceinfo": "libimobiledevice",
+        "idevice_id": "libimobiledevice",
+        "idevicepair": "libimobiledevice",
+        "usbmuxd": "usbmuxd",
         "masscan": "masscan",
         "nc": "openbsd-netcat",
         "hydra": "hydra",
@@ -861,6 +916,12 @@ INSTALL_PACKAGES = {
         "wg": "wireguard-tools",
         "openvpn": "openvpn",
         "tor": "tor",
+        "ping": "iputils",
+        "avahi-browse": "avahi-tools",
+        "ideviceinfo": "libimobiledevice-utils",
+        "idevice_id": "libimobiledevice-utils",
+        "idevicepair": "libimobiledevice-utils",
+        "usbmuxd": "usbmuxd",
         "masscan": "masscan",
         "nc": "nmap-ncat",
         "hashcat": "hashcat",
@@ -3080,6 +3141,215 @@ def ip_privacy_check(include_public: bool, endpoint: str, timeout: float) -> dic
     return results
 
 
+def parse_ping_summary(output: str) -> dict[str, object]:
+    packet_loss = None
+    average_ms = None
+    loss_match = re.search(r"(\d+(?:\.\d+)?)%\s*packet loss", output)
+    if loss_match:
+        packet_loss = float(loss_match.group(1))
+    avg_match = re.search(r"(?:rtt|round-trip).*?=\s*([\d.]+)/([\d.]+)/([\d.]+)/", output)
+    if avg_match:
+        average_ms = float(avg_match.group(2))
+    return {"packet_loss_percent": packet_loss, "average_ms": average_ms}
+
+
+def iphone_health_guide() -> dict[str, object]:
+    checks = [
+        "On iPhone: Settings > Wi-Fi, confirm it is connected to the expected SSID.",
+        "Tap the Wi-Fi network info button and check signal, IP address, router, DNS, and Private Wi-Fi Address.",
+        "Run Ktool `iphone-check --ip <iphone-ip>` from the same trusted LAN to test reachability.",
+        "For USB health info, unlock the iPhone, tap Trust This Computer, then run `iphone-usb-info`.",
+        "On iPhone: Settings > Battery > Battery Health & Charging for Apple’s official battery health value.",
+        "Keep iOS updated and avoid unknown configuration profiles or unmanaged VPNs.",
+    ]
+    print("\n[+] iPhone WiFi and health checklist")
+    for index, item in enumerate(checks, start=1):
+        print(f"{index}. {item}")
+    return {"checks": checks}
+
+
+def iphone_usb_info(timeout: float) -> dict[str, object]:
+    print("\n[+] iPhone USB device info")
+    print("[i] Requires an unlocked iPhone that trusts this computer. Ktool does not bypass pairing or passcodes.")
+
+    results: dict[str, object] = {"commands": {}, "findings": []}
+    commands = [
+        ("idevice_id", ["-l"]),
+        ("idevicepair", ["validate"]),
+        ("ideviceinfo", []),
+        ("ideviceinfo", ["-q", "com.apple.mobile.battery"]),
+    ]
+
+    for tool, args in commands:
+        key = f"{tool} {' '.join(args)}".strip()
+        result = command_output(tool, args, timeout)
+        results["commands"][key] = result
+        print(f"\n[{key}]")
+        if not result["installed"]:
+            print(f"[missing] {tool}")
+            print(install_hint_text(tool))
+            continue
+        output = str(result.get("stdout", "")).strip() or str(result.get("stderr", "")).strip()
+        print(output if output else "No output.")
+
+    battery_text = str(results["commands"].get("ideviceinfo -q com.apple.mobile.battery", {}).get("stdout", ""))
+    capacity_match = re.search(r"BatteryCurrentCapacity:\s*(\d+)", battery_text)
+    if capacity_match:
+        capacity = int(capacity_match.group(1))
+        if capacity < 30:
+            results["findings"].append(
+                {
+                    "severity": "low",
+                    "type": "low_battery",
+                    "detail": f"Connected iPhone battery is at {capacity}%.",
+                }
+            )
+
+    if results["findings"]:
+        print("\n[iPhone USB findings]")
+        for finding in results["findings"]:
+            print(f"[{finding['severity'].upper()}] {finding['type']}: {finding['detail']}")
+    return results
+
+
+def iphone_mdns_discovery(timeout: float) -> dict[str, object]:
+    print("\n[+] iPhone Bonjour/mDNS discovery")
+    print("[i] This only reads local mDNS advertisements on your LAN.")
+
+    avahi = command_output("avahi-browse", ["-a", "-t"], timeout)
+    if not avahi["installed"]:
+        print("[missing] avahi-browse")
+        print(install_hint_text("avahi-browse"))
+        return {"installed": False, "matches": []}
+
+    output = str(avahi.get("stdout", ""))
+    keywords = ("iphone", "ipad", "_apple-mobdev2", "_airplay", "_raop", "_companion-link")
+    matches = [line for line in output.splitlines() if any(keyword in line.lower() for keyword in keywords)]
+    if matches:
+        for line in matches[:80]:
+            print(line)
+        if len(matches) > 80:
+            print(f"[i] Showing first 80 matches out of {len(matches)}.")
+    else:
+        print("[i] No obvious iPhone/iPad Bonjour records found.")
+    if str(avahi.get("stderr", "")).strip():
+        print(str(avahi["stderr"]).strip(), file=sys.stderr)
+    return {"installed": True, "command": avahi.get("command"), "matches": matches, "stdout": output, "stderr": avahi.get("stderr", "")}
+
+
+def iphone_wifi_check(
+    ip_address: str | None,
+    name: str | None,
+    count: int,
+    timeout: float,
+    mdns: bool,
+    usb: bool,
+) -> dict[str, object]:
+    print("\n[+] iPhone WiFi and device health check")
+    print("[i] Use only for your own iPhone or an authorized device. Ktool does not bypass iPhone privacy controls.")
+
+    if count < 1 or count > 20:
+        raise ValueError("--count must be between 1 and 20.")
+
+    results: dict[str, object] = {
+        "ip": ip_address,
+        "name": name,
+        "ping": None,
+        "neighbor": None,
+        "mdns": None,
+        "usb": None,
+        "findings": [],
+    }
+
+    if ip_address:
+        try:
+            ipaddress.ip_address(ip_address)
+        except ValueError:
+            raise ValueError("--ip must be a valid IPv4 or IPv6 address.") from None
+
+        ping_args = ["-c", str(count), "-W", str(max(1, int(timeout))), ip_address]
+        ping_result = command_output("ping", ping_args, timeout=max(timeout * count, timeout + 2))
+        results["ping"] = ping_result
+        print(f"\n[ping {ip_address}]")
+        if not ping_result["installed"]:
+            print("[missing] ping")
+            print(install_hint_text("ping"))
+        else:
+            output = str(ping_result.get("stdout", "")).strip() or str(ping_result.get("stderr", "")).strip()
+            print(output if output else "No output.")
+            summary = parse_ping_summary(output)
+            results["ping_summary"] = summary
+            loss = summary.get("packet_loss_percent")
+            avg = summary.get("average_ms")
+            if loss is not None and loss > 0:
+                results["findings"].append(
+                    {
+                        "severity": "medium" if loss >= 25 else "low",
+                        "type": "packet_loss",
+                        "detail": f"Ping packet loss is {loss}%.",
+                    }
+                )
+            if avg is not None and avg > 150:
+                results["findings"].append(
+                    {
+                        "severity": "low",
+                        "type": "high_latency",
+                        "detail": f"Average latency is {avg} ms.",
+                    }
+                )
+
+        neighbor_result = command_output("ip", ["neigh", "show", ip_address], timeout)
+        results["neighbor"] = neighbor_result
+        print(f"\n[ip neigh show {ip_address}]")
+        if not neighbor_result["installed"]:
+            print("[missing] ip")
+            print(install_hint_text("ip"))
+        else:
+            output = str(neighbor_result.get("stdout", "")).strip() or str(neighbor_result.get("stderr", "")).strip()
+            print(output if output else "No neighbor entry found.")
+    else:
+        print("[i] No --ip provided, so WiFi reachability and neighbor checks were skipped.")
+
+    if mdns or name:
+        mdns_result = iphone_mdns_discovery(timeout=timeout)
+        results["mdns"] = mdns_result
+        if name and mdns_result.get("matches"):
+            lowered = name.lower()
+            name_matches = [line for line in mdns_result["matches"] if lowered in line.lower()]
+            results["mdns_name_matches"] = name_matches
+            if not name_matches:
+                results["findings"].append(
+                    {
+                        "severity": "info",
+                        "type": "mdns_name_not_seen",
+                        "detail": f"No Bonjour entry matched requested name: {name}",
+                    }
+                )
+
+    if usb:
+        results["usb"] = iphone_usb_info(timeout=timeout)
+
+    if results["findings"]:
+        print("\n[iPhone WiFi findings]")
+        for finding in results["findings"]:
+            print(f"[{finding['severity'].upper()}] {finding['type']}: {finding['detail']}")
+    else:
+        print("\n[OK] No obvious iPhone WiFi health issues found from selected checks.")
+
+    recommendations = [
+        "Keep the iPhone on the expected trusted SSID and avoid open/WEP/WPA1 networks.",
+        "Use WPA2-AES or WPA3 on the access point.",
+        "Check iPhone Settings > Battery > Battery Health & Charging for official battery condition.",
+        "If ping loss is high, move closer to the AP, check channel congestion, and reboot the AP/iPhone if needed.",
+        "For USB checks, unlock the iPhone and trust the computer; do not attempt to bypass pairing.",
+    ]
+    print("\n[Recommendations]")
+    for item in recommendations:
+        print(f"  - {item}")
+    results["recommendations"] = recommendations
+    return results
+
+
 def vuln_lookup(query: str, timeout: float) -> dict[str, object]:
     if not query.strip():
         raise ValueError("Search query cannot be empty.")
@@ -3627,7 +3897,7 @@ def print_roadmap(category: str | None = None) -> dict[str, object]:
         for item in details["implemented"]:
             print(f"    - {item}")
 
-        if key in {"passwords", "exploitation", "awareness", "post", "wireless", "privacy"}:
+        if key in {"passwords", "exploitation", "awareness", "post", "wireless", "privacy", "mobile"}:
             print("  Safety boundary: use dedicated labs and do not target real users or third-party systems.")
 
     return payload
@@ -4016,6 +4286,22 @@ def build_parser() -> argparse.ArgumentParser:
     wifi_scan_parser.add_argument("--timeout", type=float, default=15.0, help="Command timeout in seconds.")
     wifi_scan_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
+    iphone_parser = subparsers.add_parser("iphone-check", help="Check iPhone WiFi reachability and optional device health signals.")
+    iphone_parser.add_argument("--ip", help="iPhone IP address on your trusted LAN.")
+    iphone_parser.add_argument("--name", help="Optional iPhone name to look for in Bonjour/mDNS output.")
+    iphone_parser.add_argument("--count", type=int, default=4, help="Ping packet count.")
+    iphone_parser.add_argument("--timeout", type=float, default=5.0, help="Per-command timeout in seconds.")
+    iphone_parser.add_argument("--mdns", action="store_true", help="Search local Bonjour/mDNS records for Apple device services.")
+    iphone_parser.add_argument("--usb", action="store_true", help="Also query trusted USB iPhone info with libimobiledevice.")
+    iphone_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    iphone_usb_parser = subparsers.add_parser("iphone-usb-info", help="Show trusted USB iPhone device and battery info.")
+    iphone_usb_parser.add_argument("--timeout", type=float, default=8.0, help="Command timeout in seconds.")
+    iphone_usb_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    iphone_guide_parser = subparsers.add_parser("iphone-health-guide", help="Show iPhone WiFi and health checklist.")
+    iphone_guide_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
     privacy_parser = subparsers.add_parser("privacy-methods", help="Show lawful IP privacy methods and boundaries.")
     privacy_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
@@ -4259,6 +4545,19 @@ def main(argv: list[str] | None = None) -> int:
             results = wifi_security_check(interface=args.interface, scan=args.scan, timeout=args.timeout)
         elif args.command == "wifi-scan":
             results = wifi_scan(rescan=not args.no_rescan, timeout=args.timeout)
+        elif args.command == "iphone-check":
+            results = iphone_wifi_check(
+                ip_address=args.ip,
+                name=args.name,
+                count=args.count,
+                timeout=args.timeout,
+                mdns=args.mdns,
+                usb=args.usb,
+            )
+        elif args.command == "iphone-usb-info":
+            results = iphone_usb_info(timeout=args.timeout)
+        elif args.command == "iphone-health-guide":
+            results = iphone_health_guide()
         elif args.command == "privacy-methods":
             results = privacy_methods()
         elif args.command == "ip-privacy-check":
@@ -4426,6 +4725,9 @@ def main(argv: list[str] | None = None) -> int:
             "linux-audit",
             "wifi-check",
             "wifi-scan",
+            "iphone-check",
+            "iphone-usb-info",
+            "iphone-health-guide",
             "privacy-methods",
             "ip-privacy-check",
             "external-examples",

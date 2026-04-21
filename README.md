@@ -40,6 +40,10 @@ ktool smtp-check mail.example.com --port 587 --starttls --yes-i-am-authorized
 ktool wifi-check
 ktool wifi-check --interface wlan0 --scan
 ktool wifi-scan
+ktool iphone-health-guide
+ktool iphone-check --ip 192.168.1.23 --mdns
+ktool iphone-check --usb
+ktool iphone-usb-info
 ktool privacy-methods
 ktool ip-privacy-check
 ktool ip-privacy-check --public
