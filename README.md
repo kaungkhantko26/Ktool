@@ -55,13 +55,19 @@ Use Ktool only on systems you own, lab environments, or targets where you have e
 Push local Ktool changes to GitHub:
 
 ```bash
-update-ktool.sh
+./deploy.sh
 ```
 
 Use a custom commit message:
 
 ```bash
-update-ktool.sh "Update Ktool features"
+./deploy.sh "Update Ktool features"
+```
+
+Pull the latest Ktool from GitHub:
+
+```bash
+update-ktool.sh
 ```
 
 Optional auto-deploy before launch:

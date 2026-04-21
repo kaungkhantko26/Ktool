@@ -18,6 +18,10 @@ fi
 
 chmod +x tool.py ktool deploy.sh update-ktool.sh install-commands.sh 2>/dev/null || true
 
+if [ "${1:-}" = "--update" ]; then
+  exec ./update-ktool.sh
+fi
+
 if git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
   echo "[+] No Ktool changes to deploy."
   exit 0
