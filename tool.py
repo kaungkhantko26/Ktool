@@ -14,6 +14,8 @@ import argparse
 import concurrent.futures
 import email.utils
 import fnmatch
+import hashlib
+import html
 import ipaddress
 import json
 import os
@@ -31,7 +33,7 @@ from pathlib import Path
 from typing import Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 
 COMMON_PORTS = [
@@ -111,6 +113,33 @@ WEB_EXPOSURE_PATHS = [
     "actuator/health",
     "wp-admin/",
     "wp-login.php",
+]
+
+BACKUP_CHECK_PATHS = [
+    "backup.zip",
+    "backup.tar.gz",
+    "backup.sql",
+    "db.sql",
+    "database.sql",
+    "site.zip",
+    "www.zip",
+    "public_html.zip",
+    "config.php.bak",
+    "settings.py.bak",
+    ".env.bak",
+    "admin.bak",
+    "index.php~",
+    "wp-config.php.bak",
+]
+
+ROUTER_CHECKLIST = [
+    "Change the default admin password and use a unique long passphrase.",
+    "Use WPA2-AES or WPA3 for WiFi; avoid WEP, WPA, and WPS.",
+    "Disable WPS, UPnP, and remote administration unless explicitly needed.",
+    "Update router firmware from the vendor's official source.",
+    "Use a separate guest network for visitors and IoT devices.",
+    "Review connected devices and remove unknown clients.",
+    "Back up the router configuration after hardening it.",
 ]
 
 SECURITY_HEADERS = {
@@ -278,7 +307,8 @@ def print_menu_panel() -> None:
         ("23", "External Tool Runner"),
         ("24", "IP Privacy Check"),
         ("25", "Myanmar Plate Check"),
-        ("26", "Exit"),
+        ("26", "More Safety Checks"),
+        ("27", "Exit"),
     ]
     width = 45
     border = "+" + "-" * width + "+"
@@ -362,6 +392,12 @@ TOOL_CATEGORIES = {
             "web-scan",
             "screenshot-audit",
             "js-audit",
+            "ssl-cert-check",
+            "http-methods",
+            "robots-check",
+            "backup-file-check",
+            "redirect-check",
+            "cookie-audit",
         ],
     },
     "email": {
@@ -374,7 +410,19 @@ TOOL_CATEGORIES = {
         "title": "Pentest Workflow",
         "skills": ["Scope control", "Evidence management", "Finding documentation", "Report preparation"],
         "tools": ["Ktool"],
-        "implemented": ["scope", "evidence-init", "finding-new", "report-init", "report-export", "checklist", "recon-workflow", "web-workflow"],
+        "implemented": [
+            "scope",
+            "evidence-init",
+            "engagement-init",
+            "evidence-snapshot",
+            "finding-new",
+            "report-init",
+            "report-export",
+            "export-html-report",
+            "checklist",
+            "recon-workflow",
+            "web-workflow",
+        ],
     },
     "privacy": {
         "title": "Network Privacy and Egress Review",
@@ -391,14 +439,14 @@ TOOL_CATEGORIES = {
     "network": {
         "title": "Network Security Testing",
         "skills": ["TCP/IP", "Ports", "Firewalls", "VPNs", "Packet capture"],
-        "tools": ["wireshark", "tcpdump", "ettercap", "traceroute", "mtr", "arp-scan"],
-        "implemented": ["capture", "network-diagnostics", "local-network-discovery", "tools"],
+        "tools": ["wireshark", "tcpdump", "ettercap", "traceroute", "mtr", "arp-scan", "ss"],
+        "implemented": ["capture", "network-diagnostics", "local-network-discovery", "lan-device-list", "tools"],
     },
     "wireless": {
         "title": "Wireless Security",
         "skills": ["WiFi audit on owned networks only", "Interface inventory", "Encryption posture review", "Capture analysis"],
         "tools": ["aircrack-ng", "airodump-ng", "kismet", "iw", "nmcli", "ip"],
-        "implemented": ["wireless-info", "wifi-check", "wifi-scan", "tools"],
+        "implemented": ["wireless-info", "wifi-check", "wifi-scan", "router-checklist", "dns-leak-check", "tools"],
     },
     "mobile": {
         "title": "Mobile and iPhone Checks",
@@ -427,8 +475,8 @@ TOOL_CATEGORIES = {
     "post": {
         "title": "Post-Exploitation Defense Review",
         "skills": ["Privilege escalation concepts", "Incident response perspective"],
-        "tools": ["linpeas", "winpeas", "lynis", "chkrootkit", "rkhunter"],
-        "implemented": ["local-posture", "linux-audit"],
+        "tools": ["linpeas", "winpeas", "lynis", "chkrootkit", "rkhunter", "ufw", "nft", "iptables", "ss"],
+        "implemented": ["local-posture", "linux-audit", "firewall-check", "service-audit", "update-check", "ssh-audit-local"],
     },
 }
 
@@ -470,6 +518,13 @@ TOOL_ALIASES = {
     "linkfinder": ["linkfinder", "LinkFinder"],
     "secretfinder": ["secretfinder", "SecretFinder"],
     "sourcemapper": ["sourcemapper"],
+    "ss": ["ss"],
+    "ufw": ["ufw"],
+    "nft": ["nft"],
+    "iptables": ["iptables"],
+    "apt": ["apt"],
+    "dnf": ["dnf"],
+    "pacman": ["pacman"],
 }
 
 INSTALL_HINTS = {
@@ -1573,6 +1628,188 @@ def web_baseline(url: str, timeout: float, delay: float) -> dict[str, object]:
         show_all=False,
     )
     return {"headers": asdict(headers), "paths": [asdict(path) for path in paths]}
+
+
+def ssl_cert_check(target: str, port: int, timeout: float) -> dict[str, object]:
+    normalized = normalize_url(target) if "://" in target else f"https://{target}"
+    parsed = urlparse(normalized)
+    host = parsed.hostname
+    if not host:
+        raise ValueError(f"Invalid HTTPS target: {target}")
+    check_port = port or parsed.port or 443
+
+    print(f"\n[+] TLS certificate check for {host}:{check_port}")
+    context = ssl.create_default_context()
+    with socket.create_connection((host, check_port), timeout=timeout) as raw_sock:
+        with context.wrap_socket(raw_sock, server_hostname=host) as tls_sock:
+            cert = tls_sock.getpeercert()
+            cipher = tls_sock.cipher()
+            tls_version = tls_sock.version()
+
+    not_after = cert.get("notAfter", "")
+    expires_at = None
+    days_left = None
+    if not_after:
+        expires_at = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+        days_left = (expires_at - datetime.now(timezone.utc)).days
+
+    subject_alt_names = [
+        value
+        for name_type, value in cert.get("subjectAltName", [])
+        if name_type.lower() == "dns"
+    ]
+    issuer = " / ".join("=".join(item) for part in cert.get("issuer", []) for item in part)
+    subject = " / ".join("=".join(item) for part in cert.get("subject", []) for item in part)
+
+    findings: list[str] = []
+    if days_left is not None and days_left < 0:
+        findings.append("Certificate is expired.")
+    elif days_left is not None and days_left <= 14:
+        findings.append("Certificate expires within 14 days.")
+    if subject_alt_names and host not in subject_alt_names and not any(
+        san.startswith("*.") and host.endswith(san[1:]) for san in subject_alt_names
+    ):
+        findings.append("Hostname was not an exact/wildcard match in DNS subjectAltName list.")
+
+    print(f"Subject: {subject or 'N/A'}")
+    print(f"Issuer: {issuer or 'N/A'}")
+    print(f"TLS version: {tls_version or 'N/A'}")
+    print(f"Cipher: {cipher[0] if cipher else 'N/A'}")
+    print(f"Expires: {expires_at.isoformat() if expires_at else 'N/A'}")
+    print(f"Days left: {days_left if days_left is not None else 'N/A'}")
+    if subject_alt_names:
+        print("SANs:")
+        for san in subject_alt_names[:25]:
+            print(f"  - {san}")
+        if len(subject_alt_names) > 25:
+            print(f"  ... {len(subject_alt_names) - 25} more")
+    for finding in findings:
+        print(f"[WARN] {finding}")
+
+    return {
+        "target": normalized,
+        "host": host,
+        "port": check_port,
+        "subject": subject,
+        "issuer": issuer,
+        "tls_version": tls_version,
+        "cipher": cipher,
+        "expires_at": expires_at.isoformat() if expires_at else None,
+        "days_left": days_left,
+        "subject_alt_names": subject_alt_names,
+        "findings": findings,
+    }
+
+
+def http_methods_check(url: str, timeout: float) -> dict[str, object]:
+    normalized = normalize_url(url)
+    print(f"\n[+] HTTP methods check for {normalized}")
+    result = check_http_methods(normalized, timeout)
+    print(f"OPTIONS status: {result.get('status') or 'N/A'}")
+    allowed = result.get("allow") or []
+    risky = result.get("risky") or []
+    print(f"Allow: {', '.join(allowed) if allowed else 'No Allow header returned.'}")
+    if risky:
+        print(f"[WARN] Risky methods advertised: {', '.join(risky)}")
+    if result.get("error"):
+        print(f"[ERROR] {result['error']}")
+    return {"url": normalized, **result}
+
+
+def robots_check(url: str, timeout: float) -> dict[str, object]:
+    base_url = normalize_url(url)
+    print(f"\n[+] robots.txt and security.txt check for {base_url}")
+    paths = ["robots.txt", ".well-known/security.txt", "security.txt"]
+    results: list[dict[str, object]] = []
+    for path in paths:
+        full_url = f"{base_url}/{path}"
+        try:
+            status, headers, body = http_request(full_url, method="GET", timeout=timeout)
+            text = body.decode("utf-8", errors="replace")
+            preview = "\n".join(text.splitlines()[:20])
+            print(f"\n[{status}] {full_url}")
+            print(preview if preview else "No response body sampled.")
+            results.append({"url": full_url, "status": status, "headers": headers, "preview": preview})
+        except ConnectionError as error:
+            print(f"\n[ERROR] {full_url} -> {error}")
+            results.append({"url": full_url, "status": None, "error": str(error)})
+    return {"base_url": base_url, "results": results}
+
+
+def backup_file_check(url: str, timeout: float, delay: float, show_all: bool) -> dict[str, object]:
+    base_url = normalize_url(url)
+    print(f"\n[+] Backup/exposed file check for {base_url}")
+    print("[i] Safe HEAD/GET checks for common accidental exposure paths only.")
+    results = directory_scanner(base_url, BACKUP_CHECK_PATHS, timeout=timeout, delay=delay, show_all=show_all)
+    interesting = [
+        asdict(item)
+        for item in results
+        if item.status is not None and item.status < 400
+    ]
+    if interesting:
+        print("\n[WARN] Accessible backup-like paths need manual validation.")
+    return {"base_url": base_url, "results": [asdict(item) for item in results], "interesting": interesting}
+
+
+class TrackingRedirectHandler(HTTPRedirectHandler):
+    def __init__(self) -> None:
+        self.chain: list[dict[str, object]] = []
+        super().__init__()
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        self.chain.append({"from": req.full_url, "to": newurl, "status": code})
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def redirect_check(url: str, timeout: float) -> dict[str, object]:
+    normalized = normalize_url(url)
+    print(f"\n[+] Redirect chain check for {normalized}")
+    handler = TrackingRedirectHandler()
+    opener = build_opener(handler)
+    request = Request(normalized, method="GET", headers={"User-Agent": USER_AGENT})
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            final_url = response.geturl()
+            status = response.status
+    except HTTPError as error:
+        final_url = error.geturl()
+        status = error.code
+    except URLError as error:
+        reason = getattr(error, "reason", error)
+        raise ConnectionError(str(reason)) from error
+
+    for hop in handler.chain:
+        print(f"[{hop['status']}] {hop['from']} -> {hop['to']}")
+    print(f"Final: HTTP {status} {final_url}")
+    findings: list[str] = []
+    if normalized.startswith("http://") and final_url.startswith("http://"):
+        findings.append("No HTTPS redirect observed.")
+    if len(handler.chain) > 5:
+        findings.append("Redirect chain is long.")
+    for finding in findings:
+        print(f"[WARN] {finding}")
+    return {"url": normalized, "final_url": final_url, "status": status, "chain": handler.chain, "findings": findings}
+
+
+def cookie_audit(url: str, timeout: float) -> dict[str, object]:
+    normalized = normalize_url(url)
+    print(f"\n[+] Cookie flag audit for {normalized}")
+    status, headers, _ = http_request(normalized, method="GET", timeout=timeout)
+    parsed = urlparse(normalized)
+    issues = analyze_cookie_flags(headers, parsed.scheme)
+    cookie_headers = [value for key, value in headers.items() if key.lower() == "set-cookie"]
+    print(f"Status: HTTP {status}")
+    if not cookie_headers:
+        print("No Set-Cookie header observed.")
+    for cookie_header in cookie_headers:
+        print(f"Set-Cookie: {cookie_header}")
+    if issues:
+        print("\n[Cookie flag issues]")
+        for issue in issues:
+            print(f"[WARN] {issue['cookie']} missing {', '.join(issue['missing_flags'])}")
+    else:
+        print("[OK] No missing cookie flags observed in sampled response.")
+    return {"url": normalized, "status": status, "cookies": cookie_headers, "issues": issues}
 
 
 def extract_web_technologies(headers: dict[str, str], body: bytes) -> list[str]:
@@ -2803,6 +3040,180 @@ def command_output(tool: str, args: list[str], timeout: float) -> dict[str, obje
     }
 
 
+def firewall_check(timeout: float) -> dict[str, object]:
+    print("\n[+] Local firewall status check")
+    print("[i] Read-only local firewall inventory.")
+    commands = [
+        ("ufw", ["status", "verbose"]),
+        ("nft", ["list", "ruleset"]),
+        ("iptables", ["-S"]),
+    ]
+    results: dict[str, object] = {}
+    for tool, args in commands:
+        key = f"{tool} {' '.join(args)}"
+        result = command_output(tool, args, timeout)
+        results[key] = result
+        print(f"\n[{key}]")
+        if not result["installed"]:
+            print(f"[missing] {tool}")
+            continue
+        output = str(result.get("stdout", "")).strip() or str(result.get("stderr", "")).strip()
+        print(output[:6000] if output else "No output.")
+        if len(output) > 6000:
+            print(f"... output truncated, {len(output) - 6000} more characters in JSON report.")
+    return results
+
+
+def service_audit(timeout: float) -> dict[str, object]:
+    print("\n[+] Listening service audit")
+    print("[i] Uses local ss/netstat output only.")
+    if find_tool("ss"):
+        result = command_output("ss", ["-tulpen"], timeout)
+        key = "ss -tulpen"
+    elif find_tool("netstat"):
+        args = ["-anv"] if sys.platform == "darwin" else ["-tulpen"]
+        result = command_output("netstat", args, timeout)
+        key = f"netstat {' '.join(args)}"
+    else:
+        print("[missing] ss/netstat")
+        return {"installed": False, "error": "ss or netstat is required."}
+
+    output = str(result.get("stdout", "")).strip() or str(result.get("stderr", "")).strip()
+    print(f"\n[{key}]")
+    print(output if output else "No listening services reported.")
+    return {"command_name": key, "result": result}
+
+
+def update_check(timeout: float) -> dict[str, object]:
+    print("\n[+] Package update check")
+    print("[i] Read-only package manager check. Ktool does not install updates here.")
+    plans = [
+        ("apt", ["list", "--upgradable"]),
+        ("dnf", ["check-update"]),
+        ("pacman", ["-Qu"]),
+    ]
+    for tool, args in plans:
+        if not find_tool(tool):
+            continue
+        result = command_output(tool, args, timeout)
+        output = str(result.get("stdout", "")).strip() or str(result.get("stderr", "")).strip()
+        print(f"\n[{tool} {' '.join(args)}]")
+        print(output if output else "No updates reported by package manager.")
+        return {"manager": tool, "result": result}
+    print("[missing] apt/dnf/pacman")
+    return {"manager": None, "error": "No supported package manager found."}
+
+
+def ssh_audit_local(timeout: float) -> dict[str, object]:
+    print("\n[+] Local SSH configuration audit")
+    paths = [Path("/etc/ssh/sshd_config"), Path.home() / ".ssh" / "config"]
+    findings: list[dict[str, str]] = []
+    files: dict[str, object] = {}
+
+    risky_server_options = {
+        "PermitRootLogin": {"yes", "without-password", "prohibit-password"},
+        "PasswordAuthentication": {"yes"},
+        "PermitEmptyPasswords": {"yes"},
+        "X11Forwarding": {"yes"},
+    }
+
+    for path in paths:
+        print(f"\n[{path}]")
+        if not path.exists():
+            print("Not found.")
+            files[str(path)] = {"exists": False}
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as error:
+            print(f"Cannot read: {error}")
+            files[str(path)] = {"exists": True, "readable": False, "error": str(error)}
+            continue
+
+        files[str(path)] = {"exists": True, "readable": True, "lines": len(text.splitlines())}
+        active_lines = [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        file_findings = 0
+        for line in active_lines:
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            key, value = parts[0], parts[1].lower()
+            for option, risky_values in risky_server_options.items():
+                if key.lower() == option.lower() and value in {item.lower() for item in risky_values}:
+                    finding = {"file": str(path), "option": option, "value": parts[1], "detail": "Review this SSH setting."}
+                    findings.append(finding)
+                    file_findings += 1
+                    print(f"[REVIEW] {option} {parts[1]}")
+        if not active_lines:
+            print("No active options found.")
+        elif file_findings == 0:
+            print("No risky options found in active lines.")
+
+    sshd = command_output("sshd", ["-T"], timeout) if find_tool("sshd") else {"installed": False}
+    if sshd.get("installed"):
+        print("\n[sshd -T]")
+        output = str(sshd.get("stdout", "")).strip() or str(sshd.get("stderr", "")).strip()
+        print(output[:4000] if output else "No output.")
+
+    return {"files": files, "findings": findings, "sshd_effective_config": sshd}
+
+
+def router_checklist() -> dict[str, object]:
+    print("\n[+] Router hardening checklist")
+    for index, item in enumerate(ROUTER_CHECKLIST, start=1):
+        print(f"[ ] {index}. {item}")
+    return {"items": ROUTER_CHECKLIST}
+
+
+def dns_leak_check(include_public: bool, endpoint: str, timeout: float) -> dict[str, object]:
+    print("\n[+] DNS leak awareness check")
+    print("[i] Compares local resolver configuration with optional public egress IP.")
+    commands: list[tuple[str, list[str]]] = []
+    if find_tool("resolvectl"):
+        commands.append(("resolvectl", ["status"]))
+    elif find_tool("systemd-resolve"):
+        commands.append(("systemd-resolve", ["--status"]))
+    commands.extend([("cat", ["/etc/resolv.conf"]), ("nmcli", ["dev", "show"])])
+
+    results: dict[str, object] = {"commands": {}, "public_egress": None}
+    for tool, args in commands:
+        key = f"{tool} {' '.join(args)}"
+        result = command_output(tool, args, timeout)
+        results["commands"][key] = result
+        print(f"\n[{key}]")
+        if not result["installed"]:
+            print(f"[missing] {tool}")
+            continue
+        output = str(result.get("stdout", "")).strip() or str(result.get("stderr", "")).strip()
+        print(output[:5000] if output else "No output.")
+
+    if include_public:
+        results["public_egress"] = public_egress_check(endpoint, timeout)
+    return results
+
+
+def lan_device_list(timeout: float) -> dict[str, object]:
+    print("\n[+] Local LAN device list")
+    print("[i] Read-only neighbor/ARP table. This does not scan the network.")
+    commands = [("ip", ["neigh"]), ("arp", ["-a"])]
+    results: dict[str, object] = {}
+    for tool, args in commands:
+        key = f"{tool} {' '.join(args)}"
+        result = command_output(tool, args, timeout)
+        results[key] = result
+        print(f"\n[{key}]")
+        if not result["installed"]:
+            print(f"[missing] {tool}")
+            continue
+        output = str(result.get("stdout", "")).strip() or str(result.get("stderr", "")).strip()
+        print(output if output else "No neighbor entries reported.")
+    return results
+
+
 def parse_nmcli_wifi_rows(output: str) -> list[dict[str, object]]:
     networks: list[dict[str, object]] = []
     for line in output.splitlines():
@@ -3976,6 +4387,100 @@ def report_export(client: str, target: str, findings_dir: str, output: str) -> d
     return {"path": str(path), "findings": findings}
 
 
+def engagement_init(client: str, target: str, base_dir: str, scope_file: str | None) -> dict[str, object]:
+    normalized = target_identifier(target)
+    print(f"\n[+] Ktool engagement init for {normalized}")
+    evidence = evidence_init(normalized, base_dir=base_dir)
+    scope = scope_manager("add", target=normalized, note=f"Engagement: {client}", path=scope_file)
+    report_path = Path(str(evidence["root"])) / "reports" / "report.md"
+    if report_path.exists():
+        print(f"[i] Report already exists: {report_path}")
+        report = {"path": str(report_path), "created": False}
+    else:
+        report = report_init(client, target=normalized, output=str(report_path))
+        report["created"] = True
+    return {"client": client, "target": normalized, "evidence": evidence, "scope": scope, "report": report}
+
+
+def evidence_snapshot(command: list[str], output_dir: str, timeout: float) -> dict[str, object]:
+    if not command:
+        raise ValueError("evidence-snapshot requires a command after --, for example: ktool evidence-snapshot -- date")
+    if command[0] == "--":
+        command = command[1:]
+    if not command:
+        raise ValueError("evidence-snapshot requires a command to run.")
+
+    print(f"\n[+] Evidence snapshot: {' '.join(command)}")
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    started_at = datetime.now(timezone.utc).isoformat()
+    result = run_external(command, timeout=timeout)
+    completed_at = datetime.now(timezone.utc).isoformat()
+    transcript = (
+        f"$ {' '.join(command)}\n"
+        f"started_at: {started_at}\n"
+        f"completed_at: {completed_at}\n"
+        f"returncode: {result.returncode}\n\n"
+        "STDOUT\n"
+        f"{result.stdout}\n"
+        "STDERR\n"
+        f"{result.stderr}\n"
+    )
+    digest = hashlib.sha256(transcript.encode("utf-8")).hexdigest()
+    filename = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{slugify(command[0])}.txt"
+    path = out_dir / filename
+    path.write_text(transcript, encoding="utf-8")
+    hash_path = out_dir / f"{filename}.sha256"
+    hash_path.write_text(f"{digest}  {filename}\n", encoding="utf-8")
+    print(f"[+] Snapshot saved: {path}")
+    print(f"[+] SHA256: {digest}")
+    return {
+        "command": command,
+        "returncode": result.returncode,
+        "path": str(path),
+        "sha256_path": str(hash_path),
+        "sha256": digest,
+        "started_at": started_at,
+        "completed_at": completed_at,
+    }
+
+
+def export_html_report(input_path: str, output_path: str) -> dict[str, object]:
+    source = Path(input_path)
+    if not source.exists():
+        raise ValueError(f"Input report not found: {input_path}")
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        body = html.escape(json.dumps(payload, indent=2))
+    except json.JSONDecodeError:
+        body = html.escape(source.read_text(encoding="utf-8"))
+
+    title = f"Ktool Report - {source.name}"
+    content = (
+        "<!doctype html>\n"
+        "<html lang=\"en\">\n"
+        "<head>\n"
+        "  <meta charset=\"utf-8\">\n"
+        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+        f"  <title>{html.escape(title)}</title>\n"
+        "  <style>body{font-family:Arial,sans-serif;margin:32px;line-height:1.5;background:#f7f7f8;color:#111}"
+        "main{max-width:1100px;margin:auto;background:#fff;border:1px solid #ddd;padding:24px}"
+        "pre{white-space:pre-wrap;background:#111;color:#e8ffe8;padding:16px;overflow:auto}"
+        "h1{margin-top:0}</style>\n"
+        "</head>\n"
+        "<body><main>\n"
+        f"<h1>{html.escape(title)}</h1>\n"
+        f"<p>Generated: {html.escape(datetime.now(timezone.utc).isoformat())}</p>\n"
+        f"<pre>{body}</pre>\n"
+        "</main></body></html>\n"
+    )
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(content, encoding="utf-8")
+    print(f"[+] HTML report saved: {output}")
+    return {"input": str(source), "output": str(output)}
+
+
 def recon_workflow(domain: str, timeout: float, scope_path: str | None) -> dict[str, object]:
     domain = validate_host(domain).strip(".")
     scope = ensure_target_in_scope_or_warn(domain, scope_path)
@@ -4196,6 +4701,24 @@ def build_parser() -> argparse.ArgumentParser:
     report_export_parser.add_argument("--output", default="reports/ktool-report.md", help="Output Markdown report path.")
     report_export_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
+    engagement_parser = subparsers.add_parser("engagement-init", help="Create scope, evidence folders, and a report template together.")
+    engagement_parser.add_argument("--client", required=True, help="Client or engagement name.")
+    engagement_parser.add_argument("--target", required=True, help="Assessment target.")
+    engagement_parser.add_argument("--base-dir", default="engagements", help="Base directory for engagement folders.")
+    engagement_parser.add_argument("--scope-file", help="Scope JSON path. Defaults to .ktool/scope.json.")
+    engagement_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    snapshot_parser = subparsers.add_parser("evidence-snapshot", help="Run a local command and save timestamped output plus SHA256.")
+    snapshot_parser.add_argument("--output-dir", default="evidence", help="Directory for snapshot files.")
+    snapshot_parser.add_argument("--timeout", type=float, default=120.0, help="Command timeout in seconds.")
+    snapshot_parser.add_argument("command_args", nargs=argparse.REMAINDER, help="Command after --, for example -- date")
+    snapshot_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    html_report_parser = subparsers.add_parser("export-html-report", help="Convert a Ktool JSON/text report into a simple HTML report.")
+    html_report_parser.add_argument("input", help="Input report path.")
+    html_report_parser.add_argument("--output", default="reports/ktool-report.html", help="Output HTML path.")
+    html_report_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
     recon_workflow_parser = subparsers.add_parser("recon-workflow", help="Run a safe reconnaissance workflow.")
     add_common_run_options(recon_workflow_parser)
     recon_workflow_parser.add_argument("domain", help="Domain to assess.")
@@ -4274,6 +4797,39 @@ def build_parser() -> argparse.ArgumentParser:
     web_parser.add_argument("url", help="Base URL to check.")
     web_parser.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout in seconds.")
     web_parser.add_argument("--delay", type=float, default=0.2, help="Delay between path requests.")
+
+    ssl_cert_parser = subparsers.add_parser("ssl-cert-check", help="Check HTTPS certificate expiry, issuer, SANs, and TLS version.")
+    add_common_run_options(ssl_cert_parser)
+    ssl_cert_parser.add_argument("target", help="HTTPS URL or host.")
+    ssl_cert_parser.add_argument("--port", type=int, default=443, help="TLS port.")
+    ssl_cert_parser.add_argument("--timeout", type=float, default=8.0, help="Socket timeout in seconds.")
+
+    methods_parser = subparsers.add_parser("http-methods", help="Check advertised HTTP methods with OPTIONS.")
+    add_common_run_options(methods_parser)
+    methods_parser.add_argument("url", help="URL to check.")
+    methods_parser.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout in seconds.")
+
+    robots_parser = subparsers.add_parser("robots-check", help="Fetch robots.txt and security.txt.")
+    add_common_run_options(robots_parser)
+    robots_parser.add_argument("url", help="Base URL to check.")
+    robots_parser.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout in seconds.")
+
+    backup_parser = subparsers.add_parser("backup-file-check", help="Check common accidental backup/config file exposure paths.")
+    add_common_run_options(backup_parser)
+    backup_parser.add_argument("url", help="Base URL to check.")
+    backup_parser.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout in seconds.")
+    backup_parser.add_argument("--delay", type=float, default=0.2, help="Delay between requests.")
+    backup_parser.add_argument("--show-all", action="store_true", help="Print all statuses, including 404s.")
+
+    redirect_parser = subparsers.add_parser("redirect-check", help="Follow and report HTTP redirect chains.")
+    add_common_run_options(redirect_parser)
+    redirect_parser.add_argument("url", help="URL to check.")
+    redirect_parser.add_argument("--timeout", type=float, default=8.0, help="HTTP timeout in seconds.")
+
+    cookie_parser = subparsers.add_parser("cookie-audit", help="Check cookie Secure, HttpOnly, and SameSite flags.")
+    add_common_run_options(cookie_parser)
+    cookie_parser.add_argument("url", help="URL to check.")
+    cookie_parser.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout in seconds.")
 
     web_vuln_parser = subparsers.add_parser("web-vuln-search", help="Search for safe web vulnerability indicators.")
     add_common_run_options(web_vuln_parser)
@@ -4465,6 +5021,35 @@ def build_parser() -> argparse.ArgumentParser:
     ip_privacy_parser.add_argument("--timeout", type=float, default=8.0, help="Command/request timeout in seconds.")
     ip_privacy_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
+    firewall_parser = subparsers.add_parser("firewall-check", help="Show local firewall status from ufw/nft/iptables.")
+    firewall_parser.add_argument("--timeout", type=float, default=10.0, help="Command timeout in seconds.")
+    firewall_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    service_parser = subparsers.add_parser("service-audit", help="List local listening services with ss/netstat.")
+    service_parser.add_argument("--timeout", type=float, default=10.0, help="Command timeout in seconds.")
+    service_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    update_parser = subparsers.add_parser("update-check", help="Show available package updates without installing them.")
+    update_parser.add_argument("--timeout", type=float, default=60.0, help="Command timeout in seconds.")
+    update_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    ssh_parser = subparsers.add_parser("ssh-audit-local", help="Review local SSH client/server config for risky options.")
+    ssh_parser.add_argument("--timeout", type=float, default=10.0, help="Command timeout in seconds.")
+    ssh_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    router_parser = subparsers.add_parser("router-checklist", help="Show router hardening checklist.")
+    router_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    dns_leak_parser = subparsers.add_parser("dns-leak-check", help="Review DNS resolver configuration and optional public egress.")
+    dns_leak_parser.add_argument("--public", action="store_true", help="Query the public egress IP endpoint.")
+    dns_leak_parser.add_argument("--endpoint", default="https://api.ipify.org", help="Public egress IP endpoint.")
+    dns_leak_parser.add_argument("--timeout", type=float, default=8.0, help="Command/request timeout in seconds.")
+    dns_leak_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    lan_parser = subparsers.add_parser("lan-device-list", help="Show local neighbor/ARP table without scanning.")
+    lan_parser.add_argument("--timeout", type=float, default=8.0, help="Command timeout in seconds.")
+    lan_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
     vuln_parser = subparsers.add_parser("vuln-lookup", help="Search local Exploit-DB metadata with searchsploit.")
     add_common_run_options(vuln_parser)
     vuln_parser.add_argument("query", help="Product, CVE, or service/version query.")
@@ -4500,6 +5085,64 @@ def add_common_run_options(command_parser: argparse.ArgumentParser) -> None:
         default=argparse.SUPPRESS,
         help="Write JSON report to this path.",
     )
+
+
+def interactive_more_checks() -> object:
+    print("\n[+] Ktool more safety checks")
+    items = [
+        ("1", "SSL Certificate Check"),
+        ("2", "HTTP Methods"),
+        ("3", "Robots/Security.txt"),
+        ("4", "Backup File Check"),
+        ("5", "Redirect Check"),
+        ("6", "Cookie Audit"),
+        ("7", "Firewall Check"),
+        ("8", "Service Audit"),
+        ("9", "Package Update Check"),
+        ("10", "Local SSH Audit"),
+        ("11", "Router Checklist"),
+        ("12", "DNS Leak Check"),
+        ("13", "LAN Device List"),
+    ]
+    for number, label in items:
+        print(f" [{number.rjust(2)}] {label}")
+    choice = input(color("ktool/more> ", "1;32")).strip()
+
+    if choice == "1":
+        target = input("HTTPS URL or host: ").strip()
+        return ssl_cert_check(target, port=443, timeout=8.0)
+    if choice == "2":
+        url = input("URL: ").strip()
+        return http_methods_check(url, timeout=5.0)
+    if choice == "3":
+        url = input("Base URL: ").strip()
+        return robots_check(url, timeout=5.0)
+    if choice == "4":
+        url = input("Base URL: ").strip()
+        return backup_file_check(url, timeout=5.0, delay=0.2, show_all=False)
+    if choice == "5":
+        url = input("URL: ").strip()
+        return redirect_check(url, timeout=8.0)
+    if choice == "6":
+        url = input("URL: ").strip()
+        return cookie_audit(url, timeout=5.0)
+    if choice == "7":
+        return firewall_check(timeout=10.0)
+    if choice == "8":
+        return service_audit(timeout=10.0)
+    if choice == "9":
+        return update_check(timeout=60.0)
+    if choice == "10":
+        return ssh_audit_local(timeout=10.0)
+    if choice == "11":
+        return router_checklist()
+    if choice == "12":
+        include_public = input("Query public egress IP? [y/N]: ").strip().lower() in {"y", "yes"}
+        return dns_leak_check(include_public=include_public, endpoint="https://api.ipify.org", timeout=8.0)
+    if choice == "13":
+        return lan_device_list(timeout=8.0)
+    print("Invalid choice.")
+    return None
 
 
 def interactive_menu() -> None:
@@ -4610,6 +5253,8 @@ def interactive_menu() -> None:
                 vehicle_type = input("Vehicle type [optional]: ").strip() or None
                 myanmar_plate_check(plate=plate, region=region, vehicle_type=vehicle_type)
             elif choice == "26":
+                interactive_more_checks()
+            elif choice == "27":
                 print_exit_screen("Session closed from the interactive menu.", 0)
                 break
             else:
@@ -4686,6 +5331,12 @@ def main(argv: list[str] | None = None) -> int:
                 findings_dir=args.findings_dir,
                 output=args.output,
             )
+        elif args.command == "engagement-init":
+            results = engagement_init(args.client, target=args.target, base_dir=args.base_dir, scope_file=args.scope_file)
+        elif args.command == "evidence-snapshot":
+            results = evidence_snapshot(args.command_args, output_dir=args.output_dir, timeout=args.timeout)
+        elif args.command == "export-html-report":
+            results = export_html_report(args.input, output_path=args.output)
         elif args.command == "password-audit":
             results = password_audit(
                 args.file,
@@ -4725,6 +5376,20 @@ def main(argv: list[str] | None = None) -> int:
             results = privacy_methods()
         elif args.command == "ip-privacy-check":
             results = ip_privacy_check(include_public=args.public, endpoint=args.endpoint, timeout=args.timeout)
+        elif args.command == "firewall-check":
+            results = firewall_check(timeout=args.timeout)
+        elif args.command == "service-audit":
+            results = service_audit(timeout=args.timeout)
+        elif args.command == "update-check":
+            results = update_check(timeout=args.timeout)
+        elif args.command == "ssh-audit-local":
+            results = ssh_audit_local(timeout=args.timeout)
+        elif args.command == "router-checklist":
+            results = router_checklist()
+        elif args.command == "dns-leak-check":
+            results = dns_leak_check(include_public=args.public, endpoint=args.endpoint, timeout=args.timeout)
+        elif args.command == "lan-device-list":
+            results = lan_device_list(timeout=args.timeout)
         elif args.command == "external-examples":
             results = print_external_tool_examples()
         else:
@@ -4777,6 +5442,18 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "web":
             results = web_baseline(args.url, timeout=args.timeout, delay=args.delay)
+        elif args.command == "ssl-cert-check":
+            results = ssl_cert_check(args.target, port=args.port, timeout=args.timeout)
+        elif args.command == "http-methods":
+            results = http_methods_check(args.url, timeout=args.timeout)
+        elif args.command == "robots-check":
+            results = robots_check(args.url, timeout=args.timeout)
+        elif args.command == "backup-file-check":
+            results = backup_file_check(args.url, timeout=args.timeout, delay=args.delay, show_all=args.show_all)
+        elif args.command == "redirect-check":
+            results = redirect_check(args.url, timeout=args.timeout)
+        elif args.command == "cookie-audit":
+            results = cookie_audit(args.url, timeout=args.timeout)
         elif args.command == "web-vuln-search":
             results = web_vulnerability_search(
                 args.url,
@@ -4883,6 +5560,9 @@ def main(argv: list[str] | None = None) -> int:
             "finding-new",
             "report-init",
             "report-export",
+            "engagement-init",
+            "evidence-snapshot",
+            "export-html-report",
             "password-audit",
             "awareness-plan",
             "setoolkit-info",
@@ -4895,6 +5575,13 @@ def main(argv: list[str] | None = None) -> int:
             "iphone-health-guide",
             "privacy-methods",
             "ip-privacy-check",
+            "firewall-check",
+            "service-audit",
+            "update-check",
+            "ssh-audit-local",
+            "router-checklist",
+            "dns-leak-check",
+            "lan-device-list",
             "external-examples",
         }:
             pass

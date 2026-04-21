@@ -33,6 +33,12 @@ Example authorized checks:
 ktool dns example.com --yes-i-am-authorized
 ktool web-vuln-search https://example.com --yes-i-am-authorized
 ktool web-vuln-search https://example.com --yes-i-am-authorized --nikto --nikto-timeout 900
+ktool ssl-cert-check https://example.com --yes-i-am-authorized
+ktool http-methods https://example.com --yes-i-am-authorized
+ktool robots-check https://example.com --yes-i-am-authorized
+ktool backup-file-check https://example.com --yes-i-am-authorized
+ktool redirect-check http://example.com --yes-i-am-authorized
+ktool cookie-audit https://example.com --yes-i-am-authorized
 ktool ports 127.0.0.1 --ports 22,80,443 --yes-i-am-authorized
 ktool email-check admin@example.com --yes-i-am-authorized
 ktool email-domain example.com --dkim-selector default --yes-i-am-authorized
@@ -40,6 +46,13 @@ ktool smtp-check mail.example.com --port 587 --starttls --yes-i-am-authorized
 ktool wifi-check
 ktool wifi-check --interface wlan0 --scan
 ktool wifi-scan
+ktool router-checklist
+ktool dns-leak-check
+ktool lan-device-list
+ktool firewall-check
+ktool service-audit
+ktool update-check
+ktool ssh-audit-local
 ktool iphone-health-guide
 ktool iphone-check --ip 192.168.1.23 --mdns
 ktool iphone-check --usb
@@ -57,11 +70,14 @@ Pentester workflow:
 ```bash
 ktool scope add --target example.com --note "authorized target"
 ktool scope check --target https://example.com
+ktool engagement-init --client "Client Name" --target example.com
 ktool evidence-init example.com
+ktool evidence-snapshot --output-dir engagements/example.com/evidence -- date
 ktool checklist web
 ktool finding-new --title "Missing DMARC" --severity medium --asset example.com --evidence "No DMARC record" --impact "Email spoofing risk" --remediation "Publish DMARC and move toward enforcement"
 ktool report-init --client "Client Name" --target example.com --output engagements/example.com/reports/report.md
 ktool report-export --client "Client Name" --target example.com --findings-dir findings --output reports/ktool-report.md
+ktool export-html-report reports/ktool-report.json --output reports/ktool-report.html
 ktool recon-workflow example.com --yes-i-am-authorized
 ktool web-workflow https://example.com --yes-i-am-authorized
 ```
