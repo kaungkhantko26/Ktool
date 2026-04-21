@@ -48,9 +48,11 @@ ktool tls-audit https://example.com --tools testssl.sh,sslscan --yes-i-am-author
 ktool dns-enum example.com --tools dnsrecon,subfinder,amass --yes-i-am-authorized
 ktool url-discovery https://example.com --tools waybackurls,gau,katana --yes-i-am-authorized
 ktool web-scan https://example.com --tool nuclei --rate 20 --yes-i-am-authorized
+ktool js-audit https://example.com --browser --yes-i-am-authorized
+ktool js-audit https://example.com --tools retire,semgrep,trufflehog --output js-downloads --yes-i-am-authorized
 ```
 
-The external wrappers run the real Linux tools when they are installed. Use `install-tools` for package-manager tools and `install-hints` for tools that need Go, Python, GitHub releases, or manual setup.
+The external wrappers run the real Linux tools when they are installed. Use `install-tools` for package-manager tools and `install-hints` for tools that need Go, Python, npm, GitHub releases, or manual setup.
 
 Use Ktool only on systems you own, lab environments, or targets where you have explicit written permission.
 

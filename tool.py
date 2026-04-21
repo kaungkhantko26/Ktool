@@ -21,13 +21,14 @@ import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -248,7 +249,7 @@ TOOL_CATEGORIES = {
     },
     "web": {
         "title": "Web Application Testing",
-        "skills": ["Security headers", "Common path discovery", "Proxy-based manual testing"],
+        "skills": ["Security headers", "Common path discovery", "JavaScript exposure review", "Proxy-based manual testing"],
         "tools": [
             "burpsuite",
             "zaproxy",
@@ -273,6 +274,13 @@ TOOL_CATEGORIES = {
             "xsstrike",
             "gowitness",
             "aquatone",
+            "retire",
+            "trufflehog",
+            "semgrep",
+            "linkfinder",
+            "secretfinder",
+            "sourcemapper",
+            "playwright",
         ],
         "implemented": [
             "headers",
@@ -285,6 +293,7 @@ TOOL_CATEGORIES = {
             "url-discovery",
             "web-scan",
             "screenshot-audit",
+            "js-audit",
         ],
     },
     "passwords": {
@@ -342,6 +351,12 @@ TOOL_ALIASES = {
     "gowitness": ["gowitness"],
     "enum4linux-ng": ["enum4linux-ng", "enum4linux-ng.py"],
     "arp-scan": ["arp-scan"],
+    "retire": ["retire"],
+    "trufflehog": ["trufflehog"],
+    "semgrep": ["semgrep"],
+    "linkfinder": ["linkfinder", "LinkFinder"],
+    "secretfinder": ["secretfinder", "SecretFinder"],
+    "sourcemapper": ["sourcemapper"],
 }
 
 INSTALL_HINTS = {
@@ -597,6 +612,33 @@ INSTALL_HINTS = {
     "aquatone": {
         "GitHub releases": "Download from https://github.com/michenriksen/aquatone/releases",
     },
+    "retire": {
+        "npm": "npm install -g retire",
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install npm && sudo npm install -g retire",
+    },
+    "trufflehog": {
+        "GitHub releases": "Download from https://github.com/trufflesecurity/trufflehog/releases",
+        "Docker": "docker run --rm -v \"$PWD:/work\" trufflesecurity/trufflehog:latest filesystem /work",
+    },
+    "semgrep": {
+        "Python": "python3 -m pip install semgrep",
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install pipx && pipx install semgrep",
+    },
+    "linkfinder": {
+        "Python": "python3 -m pip install jsbeautifier requests",
+        "GitHub": "git clone https://github.com/GerbenJavado/LinkFinder && cd LinkFinder && python3 setup.py install",
+    },
+    "secretfinder": {
+        "Python": "python3 -m pip install jsbeautifier requests",
+        "GitHub": "git clone https://github.com/m4ll0k/SecretFinder && cd SecretFinder && python3 -m pip install -r requirements.txt",
+    },
+    "sourcemapper": {
+        "npm": "npm install -g sourcemapper",
+    },
+    "playwright": {
+        "Python": "python3 -m pip install playwright",
+        "Browser install": "python3 -m playwright install chromium",
+    },
 }
 
 INSTALL_PACKAGES = {
@@ -643,6 +685,7 @@ INSTALL_PACKAGES = {
         "chkrootkit": "chkrootkit",
         "rkhunter": "rkhunter",
         "wafw00f": "wafw00f",
+        "semgrep": "semgrep",
     },
     "pacman": {
         "nmap": "nmap",
@@ -1299,6 +1342,7 @@ def print_external_tool_examples() -> dict[str, object]:
         "dns-enum": "ktool dns-enum example.com --tools dnsrecon,subfinder,amass --yes-i-am-authorized",
         "url-discovery": "ktool url-discovery https://example.com --tools waybackurls,gau,katana --yes-i-am-authorized",
         "web-scan": "ktool web-scan https://example.com --tool nuclei --rate 20 --yes-i-am-authorized",
+        "js-audit": "ktool js-audit https://example.com --browser --tools retire,semgrep,trufflehog --yes-i-am-authorized",
         "fast-scan": "ktool fast-scan 192.168.1.10 --tool rustscan --ports 1-1000 --yes-i-am-authorized",
         "smb-enum": "ktool smb-enum 192.168.1.10 --tool enum4linux-ng --yes-i-am-authorized",
         "snmp-enum": "ktool snmp-enum 192.168.1.10 --community public --yes-i-am-authorized",
@@ -1424,7 +1468,8 @@ def interactive_external_runner() -> dict[str, object] | None:
     print("11. Local network discovery")
     print("12. Linux audit")
     print("13. Screenshot audit")
-    print("14. Show examples")
+    print("14. JavaScript audit")
+    print("15. Show examples")
 
     choice = input("Select external runner: ").strip()
     if choice == "1":
@@ -1482,6 +1527,12 @@ def interactive_external_runner() -> dict[str, object] | None:
         output = input("Output dir [screenshots]: ").strip() or "screenshots"
         return run_screenshot_audit(url, tool=tool, timeout=240.0, output=output)
     if choice == "14":
+        url = input("Target URL: ").strip()
+        tools = split_tool_list(input("External tools [optional: retire,semgrep,trufflehog]: ").strip(), [])
+        use_browser = input("Run browser console check with Playwright? [y/N]: ").strip().lower() in {"y", "yes"}
+        output = input("Download JS output dir [optional]: ").strip() or None
+        return run_javascript_audit(url, tools=tools, timeout=120.0, browser=use_browser, output=output)
+    if choice == "15":
         return print_external_tool_examples()
 
     print("Invalid external runner choice.")
@@ -1773,6 +1824,255 @@ def run_screenshot_audit(url: str, tool: str, timeout: float, output: str) -> di
     else:
         raise ValueError(f"Unsupported screenshot tool: {tool}")
     return run_tool_command(tool, args, timeout, active=True)
+
+
+def extract_script_urls(html: str, base_url: str) -> list[str]:
+    urls: set[str] = set()
+    for match in re.finditer(r"<script\b[^>]*\bsrc=[\"']([^\"']+)[\"']", html, re.IGNORECASE):
+        src = match.group(1).strip()
+        if src and not src.lower().startswith(("data:", "javascript:")):
+            urls.add(urljoin(base_url + "/", src))
+    return sorted(urls)
+
+
+def source_map_url(js_url: str, js_text: str) -> str | None:
+    match = re.search(r"sourceMappingURL=([^\s*]+)", js_text)
+    if match:
+        return urljoin(js_url, match.group(1).strip())
+    if js_url.endswith(".js"):
+        return f"{js_url}.map"
+    return None
+
+
+def scan_javascript_text(js_url: str, js_text: str, timeout: float) -> dict[str, object]:
+    patterns = {
+        "possible_api_key": re.compile(r"(?i)\b(api[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token)\b\s*[:=]\s*[\"'][^\"']{8,}[\"']"),
+        "firebase_config": re.compile(r"firebaseapp\.com|AIza[0-9A-Za-z_-]{20,}"),
+        "aws_access_key_id": re.compile(r"AKIA[0-9A-Z]{16}"),
+        "debugger_statement": re.compile(r"\bdebugger\s*;"),
+        "console_error_logging": re.compile(r"\bconsole\.(error|warn)\s*\("),
+        "local_storage_token": re.compile(r"(?i)localStorage\.(setItem|getItem)\s*\(\s*[\"'][^\"']*(token|secret|auth|jwt)[^\"']*[\"']"),
+    }
+    findings: list[dict[str, object]] = []
+    lines = js_text.splitlines()
+    for index, line in enumerate(lines, start=1):
+        for name, pattern in patterns.items():
+            if pattern.search(line):
+                findings.append({"type": name, "line": index})
+
+    map_url = source_map_url(js_url, js_text)
+    map_result: dict[str, object] | None = None
+    if map_url:
+        try:
+            status, headers, body = http_request(map_url, method="GET", timeout=timeout)
+            content_type = headers.get("Content-Type", "")
+            accessible = status < 400 and (b"sources" in body[:4096] or "json" in content_type.lower())
+            map_result = {
+                "url": map_url,
+                "status": status,
+                "accessible": accessible,
+                "content_type": content_type,
+            }
+        except ConnectionError as error:
+            map_result = {"url": map_url, "status": None, "accessible": False, "error": str(error)}
+
+    return {
+        "url": js_url,
+        "bytes_sampled": len(js_text.encode("utf-8", errors="ignore")),
+        "findings": findings,
+        "source_map": map_result,
+    }
+
+
+def run_browser_console_audit(url: str, timeout: float) -> dict[str, object]:
+    try:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("[missing] playwright")
+        print(install_hint_text("playwright"))
+        return {"tool": "playwright", "installed": False}
+
+    normalized = normalize_url(url)
+    console_entries: list[dict[str, object]] = []
+    page_errors: list[str] = []
+    request_failures: list[dict[str, str]] = []
+
+    print(f"\n[+] Running browser console audit for {normalized}")
+    print("[i] Headless Chromium records JavaScript console errors, page errors, and failed requests.")
+
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.on(
+                "console",
+                lambda message: console_entries.append(
+                    {
+                        "type": message.type,
+                        "text": message.text,
+                        "location": message.location,
+                    }
+                ),
+            )
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+            page.on(
+                "requestfailed",
+                lambda request: request_failures.append(
+                    {
+                        "url": request.url,
+                        "failure": request.failure or "",
+                    }
+                ),
+            )
+            page.goto(normalized, wait_until="load", timeout=int(timeout * 1000))
+            try:
+                page.wait_for_load_state("networkidle", timeout=5000)
+            except PlaywrightTimeoutError:
+                pass
+            browser.close()
+    except Exception as error:
+        print(f"[ERROR] Browser console audit failed: {error}")
+        print(install_hint_text("playwright"))
+        return {"tool": "playwright", "installed": True, "error": str(error)}
+
+    interesting_console = [entry for entry in console_entries if entry["type"] in {"error", "warning"}]
+    print(f"[SUMMARY] Console warnings/errors: {len(interesting_console)}")
+    print(f"[SUMMARY] Page errors: {len(page_errors)}")
+    print(f"[SUMMARY] Failed requests: {len(request_failures)}")
+    for entry in interesting_console[:20]:
+        print(f"[CONSOLE:{entry['type']}] {entry['text']}")
+    for error in page_errors[:10]:
+        print(f"[PAGEERROR] {error}")
+    for failure in request_failures[:10]:
+        print(f"[REQUESTFAILED] {failure['url']} -> {failure['failure']}")
+
+    return {
+        "tool": "playwright",
+        "installed": True,
+        "console": console_entries,
+        "page_errors": page_errors,
+        "request_failures": request_failures,
+    }
+
+
+def run_js_external_tool(
+    tool: str,
+    target_url: str,
+    js_urls: list[str],
+    local_dir: Path,
+    timeout: float,
+) -> dict[str, object]:
+    results: dict[str, object] = {"tool": tool, "results": []}
+    if tool == "retire":
+        for js_url in js_urls:
+            results["results"].append(run_tool_command("retire", ["--js", js_url, "--outputformat", "json"], timeout))
+    elif tool == "trufflehog":
+        results["results"].append(run_tool_command("trufflehog", ["filesystem", str(local_dir), "--no-update"], timeout))
+    elif tool == "semgrep":
+        results["results"].append(run_tool_command("semgrep", ["--config", "p/javascript", "--json", "--quiet", str(local_dir)], timeout))
+    elif tool == "linkfinder":
+        for js_url in js_urls:
+            results["results"].append(run_tool_command("linkfinder", ["-i", js_url, "-o", "cli"], timeout))
+    elif tool == "secretfinder":
+        for js_url in js_urls:
+            results["results"].append(run_tool_command("secretfinder", ["-i", js_url, "-o", "cli"], timeout))
+    elif tool == "sourcemapper":
+        output_dir = local_dir / "sourcemapper-output"
+        output_dir.mkdir(exist_ok=True)
+        for js_url in js_urls:
+            results["results"].append(run_tool_command("sourcemapper", ["-url", js_url, "-output", str(output_dir)], timeout))
+    else:
+        print(f"[skip] Unsupported JavaScript audit tool: {tool}")
+        results["supported"] = False
+    return results
+
+
+def run_javascript_audit(
+    url: str,
+    tools: list[str],
+    timeout: float,
+    browser: bool,
+    output: str | None,
+) -> dict[str, object]:
+    normalized = normalize_url(url)
+    print(f"\n[+] JavaScript vulnerability/error audit for {normalized}")
+    print("[i] This reviews public frontend JavaScript and browser errors; it does not bypass authentication.")
+
+    status, _, body = http_request(normalized, method="GET", timeout=timeout)
+    html = body.decode("utf-8", errors="ignore")
+    js_urls = extract_script_urls(html, normalized)
+    print(f"[STATUS] HTTP {status}")
+    print(f"[JS] Found {len(js_urls)} external script URL(s).")
+    for js_url in js_urls[:50]:
+        print(f"  - {js_url}")
+    if len(js_urls) > 50:
+        print(f"  ... {len(js_urls) - 50} more")
+
+    work_dir_context = tempfile.TemporaryDirectory() if output is None else None
+    local_dir = Path(output) if output else Path(work_dir_context.name)
+    local_dir.mkdir(parents=True, exist_ok=True)
+
+    builtin_results: list[dict[str, object]] = []
+    for js_url in js_urls:
+        try:
+            js_status, _, js_body = http_request(js_url, method="GET", timeout=timeout)
+            js_text = js_body.decode("utf-8", errors="ignore")
+        except ConnectionError as error:
+            builtin_results.append({"url": js_url, "error": str(error)})
+            continue
+
+        filename = re.sub(r"[^A-Za-z0-9_.-]+", "_", urlparse(js_url).path.strip("/") or "script.js")
+        if not filename.endswith(".js"):
+            filename += ".js"
+        (local_dir / filename[-160:]).write_text(js_text, encoding="utf-8", errors="ignore")
+        analysis = scan_javascript_text(js_url, js_text, timeout=timeout)
+        analysis["status"] = js_status
+        builtin_results.append(analysis)
+
+    findings = [
+        {"url": result["url"], **finding}
+        for result in builtin_results
+        for finding in result.get("findings", [])
+    ]
+    source_maps = [
+        result["source_map"]
+        for result in builtin_results
+        if result.get("source_map") and result["source_map"].get("accessible")
+    ]
+
+    if findings:
+        print("\n[Potential JavaScript issues]")
+        for finding in findings[:50]:
+            print(f"[JS] {finding['type']} at {finding['url']}:{finding['line']}")
+    else:
+        print("\n[OK] No obvious JavaScript exposure patterns found in sampled files.")
+
+    if source_maps:
+        print("\n[Accessible source maps]")
+        for source_map in source_maps:
+            print(f"[MAP] {source_map['url']} HTTP {source_map['status']}")
+
+    browser_result = run_browser_console_audit(normalized, timeout=timeout) if browser else None
+
+    external_results: list[dict[str, object]] = []
+    for tool in tools:
+        external_results.append(run_js_external_tool(tool, normalized, js_urls, local_dir, timeout))
+
+    result_payload = {
+        "url": normalized,
+        "status": status,
+        "script_urls": js_urls,
+        "download_dir": str(local_dir) if output else None,
+        "builtin": builtin_results,
+        "findings": findings,
+        "accessible_source_maps": source_maps,
+        "browser": browser_result,
+        "external": external_results,
+    }
+    if work_dir_context:
+        work_dir_context.cleanup()
+    return result_payload
 
 
 def nmap_scan(
@@ -2468,6 +2768,25 @@ def build_parser() -> argparse.ArgumentParser:
     screenshot_parser.add_argument("--output", default="screenshots", help="Output directory.")
     screenshot_parser.add_argument("--timeout", type=float, default=240.0, help="Command timeout in seconds.")
 
+    js_parser = subparsers.add_parser("js-audit", help="Audit frontend JavaScript, source maps, and browser console errors.")
+    add_common_run_options(js_parser)
+    js_parser.add_argument("url", help="Target URL.")
+    js_parser.add_argument(
+        "--tools",
+        default="",
+        help="Comma-separated optional external tools: retire,trufflehog,semgrep,linkfinder,secretfinder,sourcemapper.",
+    )
+    js_parser.add_argument(
+        "--browser",
+        action="store_true",
+        help="Use Playwright to record console errors, page errors, and failed requests.",
+    )
+    js_parser.add_argument(
+        "--output",
+        help="Optional directory to keep downloaded JavaScript files. Without this, Ktool uses a temporary directory.",
+    )
+    js_parser.add_argument("--timeout", type=float, default=120.0, help="Per-request or per-tool timeout in seconds.")
+
     subparsers.add_parser("external-examples", help="Show external tool wrapper examples.")
 
     nmap_parser = subparsers.add_parser("nmap", help="Run a conservative nmap service scan.")
@@ -2788,6 +3107,14 @@ def main(argv: list[str] | None = None) -> int:
             results = run_local_network_discovery(args.interface, timeout=args.timeout)
         elif args.command == "screenshot-audit":
             results = run_screenshot_audit(args.url, tool=args.tool, timeout=args.timeout, output=args.output)
+        elif args.command == "js-audit":
+            results = run_javascript_audit(
+                args.url,
+                tools=split_tool_list(args.tools, []),
+                timeout=args.timeout,
+                browser=args.browser,
+                output=args.output,
+            )
         elif args.command == "nmap":
             results = nmap_scan(
                 args.target,
