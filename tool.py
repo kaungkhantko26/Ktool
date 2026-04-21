@@ -446,7 +446,15 @@ TOOL_CATEGORIES = {
         "title": "Wireless Security",
         "skills": ["WiFi audit on owned networks only", "Interface inventory", "Encryption posture review", "Capture analysis"],
         "tools": ["aircrack-ng", "airodump-ng", "kismet", "iw", "nmcli", "ip"],
-        "implemented": ["wireless-info", "wifi-check", "wifi-scan", "router-checklist", "dns-leak-check", "tools"],
+        "implemented": [
+            "wireless-info",
+            "wifi-check",
+            "wifi-scan",
+            "wifi-device-users",
+            "router-checklist",
+            "dns-leak-check",
+            "tools",
+        ],
     },
     "mobile": {
         "title": "Mobile and iPhone Checks",
@@ -3214,6 +3222,214 @@ def lan_device_list(timeout: float) -> dict[str, object]:
     return results
 
 
+def parse_neighbor_devices(text: str, source: str) -> list[dict[str, object]]:
+    devices: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        ip_address = None
+        mac_address = None
+        interface = None
+        hostname = None
+        state = None
+
+        linux_match = re.search(
+            r"^(?P<ip>[0-9a-fA-F:.]+)\s+dev\s+(?P<iface>\S+).*?\s+lladdr\s+(?P<mac>[0-9a-fA-F:]{11,17})(?:\s+(?P<state>\S+))?",
+            line,
+        )
+        arp_match = re.search(
+            r"^(?P<host>\S+)\s+\((?P<ip>[^)]+)\)\s+at\s+(?P<mac>[0-9a-fA-F:]{11,17}|incomplete)(?:\s+on\s+(?P<iface>\S+))?",
+            line,
+        )
+
+        if linux_match:
+            ip_address = linux_match.group("ip")
+            mac_address = linux_match.group("mac")
+            interface = linux_match.group("iface")
+            state = linux_match.group("state")
+        elif arp_match:
+            ip_address = arp_match.group("ip")
+            mac_address = arp_match.group("mac")
+            interface = arp_match.group("iface")
+            hostname = arp_match.group("host")
+            if mac_address == "incomplete":
+                state = "incomplete"
+        else:
+            continue
+
+        if not ip_address or not mac_address or mac_address == "incomplete":
+            continue
+        try:
+            parsed_ip = ipaddress.ip_address(ip_address)
+            if parsed_ip.is_multicast or parsed_ip.is_unspecified:
+                continue
+        except ValueError:
+            continue
+        if ip_address.endswith(".255") or mac_address.lower() == "ff:ff:ff:ff:ff:ff":
+            continue
+        key = (ip_address, mac_address.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        devices.append(
+            {
+                "ip": ip_address,
+                "mac": mac_address.lower(),
+                "interface": interface,
+                "hostname": hostname if hostname and hostname != "?" else None,
+                "state": state,
+                "source": source,
+                "user": "unknown",
+            }
+        )
+    return devices
+
+
+def reverse_dns_name(ip_address: str, timeout: float) -> str | None:
+    previous_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(timeout)
+    try:
+        hostname, _, _ = socket.gethostbyaddr(ip_address)
+        return hostname
+    except (OSError, socket.herror, socket.gaierror, TimeoutError):
+        return None
+    finally:
+        socket.setdefaulttimeout(previous_timeout)
+
+
+def parse_arp_scan_devices(text: str) -> list[dict[str, object]]:
+    devices: list[dict[str, object]] = []
+    for line in text.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        ip_address, mac_address = parts[0].strip(), parts[1].strip().lower()
+        if not re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", ip_address):
+            continue
+        if not re.fullmatch(r"[0-9a-f]{2}(?::[0-9a-f]{2}){5}", mac_address):
+            continue
+        vendor = parts[2].strip() if len(parts) > 2 else ""
+        devices.append(
+            {
+                "ip": ip_address,
+                "mac": mac_address,
+                "interface": None,
+                "hostname": None,
+                "state": "active-discovery",
+                "source": "arp-scan",
+                "vendor": vendor,
+                "user": "unknown",
+            }
+        )
+    return devices
+
+
+def current_wifi_context(interface: str | None, timeout: float) -> dict[str, object]:
+    commands: list[tuple[str, list[str]]] = [
+        ("hostname", []),
+        ("ip", ["addr", "show"]),
+        ("ip", ["route"]),
+        ("iw", ["dev"]),
+        ("nmcli", ["-t", "-f", "NAME,TYPE,DEVICE", "connection", "show", "--active"]),
+    ]
+    if interface:
+        commands.append(("iw", ["dev", interface, "link"]))
+
+    context: dict[str, object] = {}
+    for tool, args in commands:
+        key = f"{tool} {' '.join(args)}".strip()
+        context[key] = command_output(tool, args, timeout)
+    return context
+
+
+def wifi_device_user_check(
+    interface: str | None,
+    active: bool,
+    resolve_names: bool,
+    timeout: float,
+    assume_authorized: bool,
+) -> dict[str, object]:
+    print("\n[+] WiFi device/user check")
+    print("[i] Ktool can show devices visible to your local machine. It cannot identify private owner names.")
+    print("[i] User is reported as unknown unless your network exposes a hostname.")
+
+    if active:
+        require_authorization(assume_authorized)
+
+    context = current_wifi_context(interface, timeout)
+    print("\n[Local WiFi/network context]")
+    for key, result in context.items():
+        if not isinstance(result, dict):
+            continue
+        print(f"\n[{key}]")
+        if not result.get("installed"):
+            print(f"[missing] {str(key).split()[0]}")
+            continue
+        output = str(result.get("stdout", "")).strip() or str(result.get("stderr", "")).strip()
+        print(output[:3000] if output else "No output.")
+
+    neighbor_results = {
+        "ip neigh": command_output("ip", ["neigh"], timeout),
+        "arp -a": command_output("arp", ["-a"], timeout),
+    }
+    devices: list[dict[str, object]] = []
+    print("\n[Visible neighbor devices]")
+    for key, result in neighbor_results.items():
+        if not result.get("installed"):
+            print(f"[missing] {str(key).split()[0]}")
+            continue
+        output = str(result.get("stdout", "")).strip() or str(result.get("stderr", "")).strip()
+        parsed = parse_neighbor_devices(output, key)
+        devices.extend(parsed)
+
+    deduped: dict[tuple[str, str], dict[str, object]] = {}
+    for device in devices:
+        deduped[(str(device["ip"]), str(device["mac"]))] = device
+    devices = list(deduped.values())
+
+    active_result = None
+    if active:
+        args = ["--localnet"]
+        if interface:
+            args.extend(["--interface", interface])
+        active_result = run_tool_command("arp-scan", args, timeout, active=True)
+        if active_result.get("installed") and active_result.get("stdout"):
+            for device in parse_arp_scan_devices(str(active_result.get("stdout", ""))):
+                deduped[(str(device["ip"]), str(device["mac"]))] = device
+            devices = list(deduped.values())
+
+    if resolve_names:
+        for device in devices:
+            if not device.get("hostname"):
+                name = reverse_dns_name(str(device["ip"]), timeout=min(timeout, 3.0))
+                if name:
+                    device["hostname"] = name
+                    device["user"] = name
+
+    if not devices:
+        print("No neighbor devices found. Try again after communicating with devices on your LAN, or use --active on your own network.")
+    else:
+        print("IP | MAC | Hostname/User hint | Interface | Source")
+        for device in sorted(devices, key=lambda item: str(item["ip"])):
+            hint = str(device.get("hostname") or device.get("user") or "unknown")
+            interface_text = str(device.get("interface") or "?")
+            print(f"{device['ip']} | {device['mac']} | {hint} | {interface_text} | {device['source']}")
+
+    return {
+        "interface": interface,
+        "active": active,
+        "resolve_names": resolve_names,
+        "context": context,
+        "neighbor_results": neighbor_results,
+        "active_result": active_result,
+        "devices": devices,
+        "privacy_note": "Ktool does not identify private owner names. Hostnames are only local network hints.",
+    }
+
+
 def parse_nmcli_wifi_rows(output: str) -> list[dict[str, object]]:
     networks: list[dict[str, object]] = []
     for line in output.splitlines():
@@ -4996,6 +5212,19 @@ def build_parser() -> argparse.ArgumentParser:
     wifi_scan_parser.add_argument("--timeout", type=float, default=15.0, help="Command timeout in seconds.")
     wifi_scan_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
+    wifi_users_parser = subparsers.add_parser("wifi-device-users", help="Show local WiFi/LAN device and hostname/user hints.")
+    wifi_users_parser.add_argument("--interface", help="Optional wireless interface, for example wlan0.")
+    wifi_users_parser.add_argument("--active", action="store_true", help="Run arp-scan local discovery if installed and authorized.")
+    wifi_users_parser.add_argument("--resolve-names", action="store_true", help="Try reverse DNS for local device hostname hints.")
+    wifi_users_parser.add_argument("--timeout", type=float, default=8.0, help="Command/request timeout in seconds.")
+    wifi_users_parser.add_argument(
+        "--yes-i-am-authorized",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Confirm you have permission for active local discovery.",
+    )
+    wifi_users_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
     iphone_parser = subparsers.add_parser("iphone-check", help="Check iPhone WiFi reachability and optional device health signals.")
     iphone_parser.add_argument("--ip", help="iPhone IP address on your trusted LAN.")
     iphone_parser.add_argument("--name", help="Optional iPhone name to look for in Bonjour/mDNS output.")
@@ -5103,6 +5332,7 @@ def interactive_more_checks() -> object:
         ("11", "Router Checklist"),
         ("12", "DNS Leak Check"),
         ("13", "LAN Device List"),
+        ("14", "WiFi Device/User Check"),
     ]
     for number, label in items:
         print(f" [{number.rjust(2)}] {label}")
@@ -5141,6 +5371,17 @@ def interactive_more_checks() -> object:
         return dns_leak_check(include_public=include_public, endpoint="https://api.ipify.org", timeout=8.0)
     if choice == "13":
         return lan_device_list(timeout=8.0)
+    if choice == "14":
+        interface = input("Wireless interface [optional]: ").strip() or None
+        active = input("Run active arp-scan discovery on your own network? [y/N]: ").strip().lower() in {"y", "yes"}
+        resolve_names = input("Try reverse DNS hostname hints? [y/N]: ").strip().lower() in {"y", "yes"}
+        return wifi_device_user_check(
+            interface=interface,
+            active=active,
+            resolve_names=resolve_names,
+            timeout=8.0,
+            assume_authorized=False,
+        )
     print("Invalid choice.")
     return None
 
@@ -5359,6 +5600,14 @@ def main(argv: list[str] | None = None) -> int:
             results = wifi_security_check(interface=args.interface, scan=args.scan, timeout=args.timeout)
         elif args.command == "wifi-scan":
             results = wifi_scan(rescan=not args.no_rescan, timeout=args.timeout)
+        elif args.command == "wifi-device-users":
+            results = wifi_device_user_check(
+                interface=args.interface,
+                active=args.active,
+                resolve_names=args.resolve_names,
+                timeout=args.timeout,
+                assume_authorized=getattr(args, "yes_i_am_authorized", False),
+            )
         elif args.command == "iphone-check":
             results = iphone_wifi_check(
                 ip_address=args.ip,
@@ -5570,6 +5819,7 @@ def main(argv: list[str] | None = None) -> int:
             "linux-audit",
             "wifi-check",
             "wifi-scan",
+            "wifi-device-users",
             "iphone-check",
             "iphone-usb-info",
             "iphone-health-guide",

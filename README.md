@@ -46,6 +46,9 @@ ktool smtp-check mail.example.com --port 587 --starttls --yes-i-am-authorized
 ktool wifi-check
 ktool wifi-check --interface wlan0 --scan
 ktool wifi-scan
+ktool wifi-device-users
+ktool wifi-device-users --resolve-names
+ktool wifi-device-users --active --yes-i-am-authorized
 ktool router-checklist
 ktool dns-leak-check
 ktool lan-device-list
