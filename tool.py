@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import email.utils
 import ipaddress
 import json
 import os
@@ -206,11 +207,12 @@ def print_menu_panel() -> None:
         ("16", "Local Posture Review"),
         ("17", "Install Hints"),
         ("18", "Web Vulnerability Search"),
-        ("19", "SEToolkit Info"),
-        ("20", "Clear Screen"),
-        ("21", "Restart Console"),
-        ("22", "External Tool Runner"),
-        ("23", "Exit"),
+        ("19", "Email Security Check"),
+        ("20", "SEToolkit Info"),
+        ("21", "Clear Screen"),
+        ("22", "Restart Console"),
+        ("23", "External Tool Runner"),
+        ("24", "Exit"),
     ]
     width = 45
     border = "+" + "-" * width + "+"
@@ -296,6 +298,12 @@ TOOL_CATEGORIES = {
             "js-audit",
         ],
     },
+    "email": {
+        "title": "Email Security Testing",
+        "skills": ["Email format review", "MX/SPF/DMARC/DKIM checks", "SMTP banner and TLS capability review"],
+        "tools": ["dig", "host", "nslookup", "swaks", "checkdmarc"],
+        "implemented": ["email-check", "email-domain", "smtp-check"],
+    },
     "passwords": {
         "title": "Password Security Testing",
         "skills": ["Password audit policy", "Weak password review", "Hash cracking in labs only"],
@@ -351,6 +359,10 @@ TOOL_ALIASES = {
     "gowitness": ["gowitness"],
     "enum4linux-ng": ["enum4linux-ng", "enum4linux-ng.py"],
     "arp-scan": ["arp-scan"],
+    "dig": ["dig"],
+    "host": ["host"],
+    "swaks": ["swaks"],
+    "checkdmarc": ["checkdmarc"],
     "retire": ["retire"],
     "trufflehog": ["trufflehog"],
     "semgrep": ["semgrep"],
@@ -375,6 +387,11 @@ INSTALL_HINTS = {
         "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install whois",
         "Arch": "sudo pacman -S whois",
         "Fedora": "sudo dnf install whois",
+    },
+    "nslookup": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install dnsutils",
+        "Arch": "sudo pacman -S bind",
+        "Fedora": "sudo dnf install bind-utils",
     },
     "tcpdump": {
         "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install tcpdump",
@@ -639,6 +656,26 @@ INSTALL_HINTS = {
         "Python": "python3 -m pip install playwright",
         "Browser install": "python3 -m playwright install chromium",
     },
+    "dig": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install dnsutils",
+        "Arch": "sudo pacman -S bind",
+        "Fedora": "sudo dnf install bind-utils",
+    },
+    "host": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install bind9-host",
+        "Arch": "sudo pacman -S bind",
+        "Fedora": "sudo dnf install bind-utils",
+    },
+    "swaks": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install swaks",
+        "Arch": "sudo pacman -S swaks",
+        "Fedora": "sudo dnf install swaks",
+        "Safety": "Use only for controlled SMTP diagnostics. Ktool does not send test emails.",
+    },
+    "checkdmarc": {
+        "Python": "python3 -m pip install checkdmarc",
+        "pipx": "pipx install checkdmarc",
+    },
 }
 
 INSTALL_PACKAGES = {
@@ -686,6 +723,10 @@ INSTALL_PACKAGES = {
         "rkhunter": "rkhunter",
         "wafw00f": "wafw00f",
         "semgrep": "semgrep",
+        "dig": "dnsutils",
+        "host": "bind9-host",
+        "nslookup": "dnsutils",
+        "swaks": "swaks",
     },
     "pacman": {
         "nmap": "nmap",
@@ -713,6 +754,10 @@ INSTALL_PACKAGES = {
         "lynis": "lynis",
         "chkrootkit": "chkrootkit",
         "rkhunter": "rkhunter",
+        "dig": "bind",
+        "host": "bind",
+        "nslookup": "bind",
+        "swaks": "swaks",
     },
     "dnf": {
         "nmap": "nmap",
@@ -732,6 +777,10 @@ INSTALL_PACKAGES = {
         "lynis": "lynis",
         "rkhunter": "rkhunter",
         "wafw00f": "wafw00f",
+        "dig": "bind-utils",
+        "host": "bind-utils",
+        "nslookup": "bind-utils",
+        "swaks": "swaks",
     },
 }
 
@@ -966,6 +1015,262 @@ def whois_lookup(domain: str, timeout: float) -> dict[str, object]:
         "returncode": result.returncode,
         "stdout": result.stdout,
         "stderr": result.stderr,
+    }
+
+
+def parse_email_address(address: str) -> tuple[str, str]:
+    parsed_name, parsed_address = email.utils.parseaddr(address.strip())
+    _ = parsed_name
+    if not parsed_address or parsed_address != address.strip():
+        raise ValueError(f"Invalid email address: {address}")
+    if not re.fullmatch(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", parsed_address):
+        raise ValueError(f"Invalid email address: {address}")
+    local_part, domain = parsed_address.rsplit("@", 1)
+    if len(local_part) > 64 or len(parsed_address) > 254:
+        raise ValueError("Email address is longer than common SMTP limits.")
+    return local_part, domain.lower().strip(".")
+
+
+def clean_dns_line(line: str) -> str:
+    line = line.strip()
+    if not line:
+        return line
+    if line.startswith('"') and line.endswith('"'):
+        return line[1:-1]
+    return line.replace('" "', "").strip('"')
+
+
+def dns_query(name: str, record_type: str, timeout: float) -> dict[str, object]:
+    name = name.strip().strip(".")
+    record_type = record_type.upper()
+    commands: list[tuple[str, list[str]]] = [
+        ("dig", ["+short", record_type, name]),
+        ("host", ["-t", record_type, name]),
+        ("nslookup", ["-type=" + record_type, name]),
+    ]
+
+    for tool, args in commands:
+        tool_path = find_tool(tool)
+        if not tool_path:
+            continue
+        command = [tool_path, *args]
+        result = run_external(command, timeout=timeout)
+        raw_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        records = [clean_dns_line(line) for line in raw_lines]
+        return {
+            "tool": tool,
+            "command": command,
+            "returncode": result.returncode,
+            "records": records,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+
+    print("[missing] dig/host/nslookup")
+    print(install_hint_text("dig"))
+    return {"tool": None, "records": [], "error": "No DNS query tool installed."}
+
+
+def mx_hosts(mx_records: list[str]) -> list[str]:
+    hosts: list[str] = []
+    for record in mx_records:
+        if " mail exchanger =" in record:
+            host = record.rsplit("=", 1)[-1].strip()
+        else:
+            parts = record.split()
+            host = parts[-1] if parts else ""
+        host = host.rstrip(".")
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts
+
+
+def email_domain_audit(domain: str, dkim_selector: str | None, timeout: float, use_checkdmarc: bool) -> dict[str, object]:
+    domain = validate_host(domain).lower().strip(".")
+    print(f"\n[+] Email domain security check for {domain}")
+    print("[i] This checks public DNS mail controls only; it does not send email.")
+
+    mx = dns_query(domain, "MX", timeout)
+    txt = dns_query(domain, "TXT", timeout)
+    dmarc = dns_query(f"_dmarc.{domain}", "TXT", timeout)
+    dkim = dns_query(f"{dkim_selector}._domainkey.{domain}", "TXT", timeout) if dkim_selector else None
+
+    spf_records = [record for record in txt.get("records", []) if "v=spf1" in record.lower()]
+    dmarc_records = [record for record in dmarc.get("records", []) if "v=dmarc1" in record.lower()]
+    dkim_records = [
+        record
+        for record in (dkim or {}).get("records", [])
+        if "v=dkim1" in record.lower() or "p=" in record.lower()
+    ]
+
+    findings: list[dict[str, object]] = []
+    if not mx.get("records"):
+        findings.append({"severity": "high", "type": "missing_mx", "detail": "No MX records found."})
+    if not spf_records:
+        findings.append({"severity": "medium", "type": "missing_spf", "detail": "No SPF TXT record found."})
+    elif len(spf_records) > 1:
+        findings.append({"severity": "medium", "type": "multiple_spf", "detail": "Multiple SPF records can break SPF validation."})
+    if not dmarc_records:
+        findings.append({"severity": "medium", "type": "missing_dmarc", "detail": "No DMARC record found at _dmarc."})
+    else:
+        joined_dmarc = " ".join(dmarc_records).lower()
+        if "p=none" in joined_dmarc:
+            findings.append({"severity": "low", "type": "dmarc_monitor_only", "detail": "DMARC policy is p=none."})
+    if dkim_selector and not dkim_records:
+        findings.append({"severity": "medium", "type": "missing_dkim_selector", "detail": f"No DKIM record found for selector {dkim_selector}."})
+
+    print("\n[MX]")
+    for record in mx.get("records", []) or ["No MX records found."]:
+        print(f"  {record}")
+    print("\n[SPF]")
+    for record in spf_records or ["No SPF record found."]:
+        print(f"  {record}")
+    print("\n[DMARC]")
+    for record in dmarc_records or ["No DMARC record found."]:
+        print(f"  {record}")
+    if dkim_selector:
+        print(f"\n[DKIM:{dkim_selector}]")
+        for record in dkim_records or ["No DKIM record found for selector."]:
+            print(f"  {record}")
+
+    if findings:
+        print("\n[Potential email issues]")
+        for finding in findings:
+            print(f"[{finding['severity'].upper()}] {finding['type']}: {finding['detail']}")
+    else:
+        print("\n[OK] No obvious email DNS posture issues found.")
+
+    checkdmarc_result = None
+    if use_checkdmarc:
+        checkdmarc_result = run_tool_command("checkdmarc", [domain, "--format", "json"], timeout)
+
+    return {
+        "domain": domain,
+        "mx": mx,
+        "spf": spf_records,
+        "dmarc": dmarc_records,
+        "dkim_selector": dkim_selector,
+        "dkim": dkim_records,
+        "findings": findings,
+        "checkdmarc": checkdmarc_result,
+    }
+
+
+def email_address_check(address: str, dkim_selector: str | None, timeout: float, use_checkdmarc: bool) -> dict[str, object]:
+    local_part, domain = parse_email_address(address)
+    print(f"\n[+] Email address check for {address}")
+    print("[i] Ktool validates format and domain posture only; it does not verify mailbox existence.")
+
+    disposable_domains = {
+        "10minutemail.com",
+        "guerrillamail.com",
+        "mailinator.com",
+        "tempmail.com",
+        "yopmail.com",
+    }
+    warnings: list[str] = []
+    if domain in disposable_domains:
+        warnings.append("Domain appears in a small built-in disposable email list.")
+    if local_part.lower() in {"admin", "administrator", "root", "support", "info", "sales"}:
+        warnings.append("Local part is a common role account.")
+
+    for warning in warnings:
+        print(f"[WARN] {warning}")
+
+    domain_result = email_domain_audit(domain, dkim_selector=dkim_selector, timeout=timeout, use_checkdmarc=use_checkdmarc)
+    return {
+        "address": address,
+        "local_part": local_part,
+        "domain": domain,
+        "warnings": warnings,
+        "domain_audit": domain_result,
+    }
+
+
+def smtp_read(sock: socket.socket, timeout: float) -> str:
+    sock.settimeout(timeout)
+    chunks: list[bytes] = []
+    while True:
+        try:
+            chunk = sock.recv(4096)
+        except TimeoutError:
+            break
+        except socket.timeout:
+            break
+        if not chunk:
+            break
+        chunks.append(chunk)
+        text = b"".join(chunks).decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        if lines and re.match(r"^\d{3} ", lines[-1]):
+            break
+        if len(b"".join(chunks)) > 16384:
+            break
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+def smtp_check(target: str, port: int, timeout: float, starttls: bool) -> dict[str, object]:
+    target = validate_host(target)
+    if port not in {25, 465, 587}:
+        raise ValueError("--port must be one of 25, 465, or 587.")
+
+    print(f"\n[+] SMTP banner/TLS check for {target}:{port}")
+    print("[i] This reads SMTP capabilities only; it does not send mail, verify users, or attempt login.")
+
+    context = ssl.create_default_context()
+    with socket.create_connection((target, port), timeout=timeout) as raw_sock:
+        if port == 465:
+            sock: socket.socket = context.wrap_socket(raw_sock, server_hostname=target)
+            tls_active = True
+        else:
+            sock = raw_sock
+            tls_active = False
+
+        with sock:
+            banner = smtp_read(sock, timeout)
+            sock.sendall(b"EHLO ktool.local\r\n")
+            ehlo = smtp_read(sock, timeout)
+            starttls_available = "STARTTLS" in ehlo.upper()
+            tls_ehlo = ""
+
+            if starttls and starttls_available and not tls_active:
+                sock.sendall(b"STARTTLS\r\n")
+                starttls_response = smtp_read(sock, timeout)
+                if starttls_response.startswith("220"):
+                    tls_sock = context.wrap_socket(sock, server_hostname=target)
+                    tls_active = True
+                    tls_sock.sendall(b"EHLO ktool.local\r\n")
+                    tls_ehlo = smtp_read(tls_sock, timeout)
+                    try:
+                        tls_sock.sendall(b"QUIT\r\n")
+                    except OSError:
+                        pass
+                else:
+                    tls_ehlo = starttls_response
+            else:
+                try:
+                    sock.sendall(b"QUIT\r\n")
+                except OSError:
+                    pass
+
+    print("\n[BANNER]")
+    print(banner.strip() or "No banner received.")
+    print("\n[EHLO]")
+    print(ehlo.strip() or "No EHLO response received.")
+    print(f"\n[STARTTLS] {'available' if starttls_available else 'not advertised'}")
+    print(f"[TLS ACTIVE] {'yes' if tls_active else 'no'}")
+    if tls_ehlo:
+        print("\n[TLS EHLO]")
+        print(tls_ehlo.strip())
+
+    return {
+        "target": target,
+        "port": port,
+        "banner": banner,
+        "ehlo": ehlo,
+        "starttls_available": starttls_available,
+        "tls_active": tls_active,
+        "tls_ehlo": tls_ehlo,
     }
 
 
@@ -2622,6 +2927,27 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_run_options(dns_parser)
     dns_parser.add_argument("domain", help="Domain or hostname to resolve.")
 
+    email_check_parser = subparsers.add_parser("email-check", help="Check email format and domain mail security posture.")
+    add_common_run_options(email_check_parser)
+    email_check_parser.add_argument("address", help="Email address to check.")
+    email_check_parser.add_argument("--dkim-selector", help="Optional DKIM selector to query.")
+    email_check_parser.add_argument("--checkdmarc", action="store_true", help="Run checkdmarc if installed.")
+    email_check_parser.add_argument("--timeout", type=float, default=10.0, help="DNS/tool timeout in seconds.")
+
+    email_domain_parser = subparsers.add_parser("email-domain", help="Check MX, SPF, DMARC, and optional DKIM records.")
+    add_common_run_options(email_domain_parser)
+    email_domain_parser.add_argument("domain", help="Email domain to check.")
+    email_domain_parser.add_argument("--dkim-selector", help="Optional DKIM selector to query.")
+    email_domain_parser.add_argument("--checkdmarc", action="store_true", help="Run checkdmarc if installed.")
+    email_domain_parser.add_argument("--timeout", type=float, default=10.0, help="DNS/tool timeout in seconds.")
+
+    smtp_parser = subparsers.add_parser("smtp-check", help="Check SMTP banner, EHLO capabilities, and STARTTLS support.")
+    add_common_run_options(smtp_parser)
+    smtp_parser.add_argument("target", help="SMTP server hostname or IP.")
+    smtp_parser.add_argument("--port", type=int, default=25, choices=[25, 465, 587], help="SMTP port.")
+    smtp_parser.add_argument("--starttls", action="store_true", help="Attempt STARTTLS if the server advertises it.")
+    smtp_parser.add_argument("--timeout", type=float, default=10.0, help="Socket timeout in seconds.")
+
     whois_parser = subparsers.add_parser("whois", help="Run a WHOIS lookup using the system whois tool.")
     add_common_run_options(whois_parser)
     whois_parser.add_argument("domain", help="Domain or IP address to query.")
@@ -2934,17 +3260,24 @@ def interactive_menu() -> None:
                     nikto_timeout=900.0,
                 )
             elif choice == "19":
-                setoolkit_info()
+                address_or_domain = input("Email address or domain: ").strip()
+                selector = input("DKIM selector [optional]: ").strip() or None
+                if "@" in address_or_domain:
+                    email_address_check(address_or_domain, dkim_selector=selector, timeout=10.0, use_checkdmarc=False)
+                else:
+                    email_domain_audit(address_or_domain, dkim_selector=selector, timeout=10.0, use_checkdmarc=False)
             elif choice == "20":
-                clear_screen()
-                print_startup_banner()
+                setoolkit_info()
             elif choice == "21":
                 clear_screen()
                 print_startup_banner()
-                print(color("[restarted] Ktool console restarted.", "1;32"))
             elif choice == "22":
-                interactive_external_runner()
+                clear_screen()
+                print_startup_banner()
+                print(color("[restarted] Ktool console restarted.", "1;32"))
             elif choice == "23":
+                interactive_external_runner()
+            elif choice == "24":
                 print_exit_screen("Session closed from the interactive menu.", 0)
                 break
             else:
@@ -3016,6 +3349,22 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "dns":
             results = resolve_dns(args.domain)
+        elif args.command == "email-check":
+            results = email_address_check(
+                args.address,
+                dkim_selector=args.dkim_selector,
+                timeout=args.timeout,
+                use_checkdmarc=args.checkdmarc,
+            )
+        elif args.command == "email-domain":
+            results = email_domain_audit(
+                args.domain,
+                dkim_selector=args.dkim_selector,
+                timeout=args.timeout,
+                use_checkdmarc=args.checkdmarc,
+            )
+        elif args.command == "smtp-check":
+            results = smtp_check(args.target, port=args.port, timeout=args.timeout, starttls=args.starttls)
         elif args.command == "whois":
             results = whois_lookup(args.domain, timeout=args.timeout)
         elif args.command == "ports":

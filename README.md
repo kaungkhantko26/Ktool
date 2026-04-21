@@ -34,6 +34,9 @@ ktool dns example.com --yes-i-am-authorized
 ktool web-vuln-search https://example.com --yes-i-am-authorized
 ktool web-vuln-search https://example.com --yes-i-am-authorized --nikto --nikto-timeout 900
 ktool ports 127.0.0.1 --ports 22,80,443 --yes-i-am-authorized
+ktool email-check admin@example.com --yes-i-am-authorized
+ktool email-domain example.com --dkim-selector default --yes-i-am-authorized
+ktool smtp-check mail.example.com --port 587 --starttls --yes-i-am-authorized
 ktool setoolkit-info
 ```
 
