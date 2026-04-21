@@ -247,7 +247,8 @@ def print_menu_panel() -> None:
         ("21", "Clear Screen"),
         ("22", "Restart Console"),
         ("23", "External Tool Runner"),
-        ("24", "Exit"),
+        ("24", "IP Privacy Check"),
+        ("25", "Exit"),
     ]
     width = 45
     border = "+" + "-" * width + "+"
@@ -345,6 +346,12 @@ TOOL_CATEGORIES = {
         "tools": ["Ktool"],
         "implemented": ["scope", "evidence-init", "finding-new", "report-init", "report-export", "checklist", "recon-workflow", "web-workflow"],
     },
+    "privacy": {
+        "title": "Network Privacy and Egress Review",
+        "skills": ["Public egress IP review", "VPN/proxy indicator checks", "DNS leak awareness"],
+        "tools": ["ip", "curl", "wg", "openvpn", "tor", "nmcli"],
+        "implemented": ["privacy-methods", "ip-privacy-check"],
+    },
     "passwords": {
         "title": "Password Security Testing",
         "skills": ["Password audit policy", "Weak password review", "Hash cracking in labs only"],
@@ -405,6 +412,10 @@ TOOL_ALIASES = {
     "swaks": ["swaks"],
     "checkdmarc": ["checkdmarc"],
     "ip": ["ip"],
+    "curl": ["curl"],
+    "wg": ["wg"],
+    "openvpn": ["openvpn"],
+    "tor": ["tor"],
     "retire": ["retire"],
     "trufflehog": ["trufflehog"],
     "semgrep": ["semgrep"],
@@ -459,6 +470,29 @@ INSTALL_HINTS = {
         "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install iproute2",
         "Arch": "sudo pacman -S iproute2",
         "Fedora": "sudo dnf install iproute",
+    },
+    "curl": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install curl",
+        "Arch": "sudo pacman -S curl",
+        "Fedora": "sudo dnf install curl",
+    },
+    "wg": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install wireguard-tools",
+        "Arch": "sudo pacman -S wireguard-tools",
+        "Fedora": "sudo dnf install wireguard-tools",
+        "Safety": "Use only for lawful privacy or authorized corporate/lab networks.",
+    },
+    "openvpn": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install openvpn",
+        "Arch": "sudo pacman -S openvpn",
+        "Fedora": "sudo dnf install openvpn",
+        "Safety": "Use only for lawful privacy or authorized corporate/lab networks.",
+    },
+    "tor": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install tor",
+        "Arch": "sudo pacman -S tor",
+        "Fedora": "sudo dnf install tor",
+        "Safety": "Use Tor for lawful privacy. Ktool does not route scans or attacks through Tor.",
     },
     "setoolkit": {
         "Kali": "sudo apt update && sudo apt install set",
@@ -734,6 +768,10 @@ INSTALL_PACKAGES = {
         "iw": "iw",
         "nmcli": "network-manager",
         "ip": "iproute2",
+        "curl": "curl",
+        "wg": "wireguard-tools",
+        "openvpn": "openvpn",
+        "tor": "tor",
         "searchsploit": "exploitdb",
         "masscan": "masscan",
         "nc": "netcat-openbsd",
@@ -783,6 +821,10 @@ INSTALL_PACKAGES = {
         "iw": "iw",
         "nmcli": "networkmanager",
         "ip": "iproute2",
+        "curl": "curl",
+        "wg": "wireguard-tools",
+        "openvpn": "openvpn",
+        "tor": "tor",
         "masscan": "masscan",
         "nc": "openbsd-netcat",
         "hydra": "hydra",
@@ -815,6 +857,10 @@ INSTALL_PACKAGES = {
         "iw": "iw",
         "nmcli": "NetworkManager",
         "ip": "iproute",
+        "curl": "curl",
+        "wg": "wireguard-tools",
+        "openvpn": "openvpn",
+        "tor": "tor",
         "masscan": "masscan",
         "nc": "nmap-ncat",
         "hashcat": "hashcat",
@@ -2862,6 +2908,178 @@ def wifi_security_check(interface: str | None, scan: bool, timeout: float) -> di
     return results
 
 
+def privacy_methods() -> dict[str, object]:
+    methods = [
+        {
+            "name": "Trusted VPN",
+            "use": "Lawful privacy, remote work, lab segmentation, and protecting traffic on untrusted networks.",
+            "notes": "Choose a provider or corporate VPN you trust; verify DNS handling and kill-switch behavior.",
+        },
+        {
+            "name": "Tor Browser",
+            "use": "Privacy-preserving web browsing and research where Tor is legal and appropriate.",
+            "notes": "Use Tor Browser for browsing. Ktool does not route scans or assessment traffic through Tor.",
+        },
+        {
+            "name": "Corporate proxy",
+            "use": "Approved enterprise egress control, logging, and policy enforcement.",
+            "notes": "Document proxy use in the engagement scope and avoid bypassing client logging requirements.",
+        },
+        {
+            "name": "Separate lab network",
+            "use": "Keeping test traffic away from personal or production networks.",
+            "notes": "Prefer isolated lab infrastructure for training, exploit validation, and noisy scanner testing.",
+        },
+    ]
+    boundaries = [
+        "Do not use privacy tooling to attack third-party systems.",
+        "Do not bypass authorization, rate limits, client logging, or legal controls.",
+        "Do not use Ktool to chain scanners through anonymizing proxies.",
+        "For professional work, document the egress IPs and VPN/proxy setup in the rules of engagement.",
+    ]
+
+    print("\n[+] Safe IP privacy methods")
+    for method in methods:
+        print(f"\n{method['name']}")
+        print(f"  Use: {method['use']}")
+        print(f"  Note: {method['notes']}")
+
+    print("\n[Boundaries]")
+    for item in boundaries:
+        print(f"  - {item}")
+
+    return {"methods": methods, "boundaries": boundaries}
+
+
+def public_ip_lookup(endpoint: str, timeout: float) -> dict[str, object]:
+    normalized = normalize_url(endpoint)
+    try:
+        status, headers, body = http_request(normalized, method="GET", timeout=timeout)
+    except ConnectionError as error:
+        print(f"[WARN] Public egress lookup failed: {error}")
+        return {"endpoint": normalized, "status": None, "error": str(error)}
+
+    text = body.decode("utf-8", errors="ignore").strip()
+    print(f"[PUBLIC EGRESS] {text if text else 'No response body.'}")
+    return {
+        "endpoint": normalized,
+        "status": status,
+        "content_type": headers.get("Content-Type", ""),
+        "body": text,
+    }
+
+
+def proxy_environment() -> dict[str, str]:
+    names = [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+    ]
+    return {name: os.environ[name] for name in names if os.environ.get(name)}
+
+
+def ip_privacy_check(include_public: bool, endpoint: str, timeout: float) -> dict[str, object]:
+    print("\n[+] IP privacy and egress checker")
+    print("[i] Read-only review. Ktool does not hide traffic, route scans through proxies, or bypass logging.")
+
+    command_plan: list[tuple[str, list[str]]] = [
+        ("ip", ["addr", "show"]),
+        ("ip", ["route"]),
+        ("nmcli", ["connection", "show", "--active"]),
+        ("wg", ["show"]),
+        ("systemctl", ["is-active", "tor"]),
+        ("systemctl", ["is-active", "openvpn"]),
+    ]
+    if find_tool("resolvectl"):
+        command_plan.append(("resolvectl", ["status"]))
+    elif find_tool("systemd-resolve"):
+        command_plan.append(("systemd-resolve", ["--status"]))
+
+    results: dict[str, object] = {
+        "commands": {},
+        "proxy_environment": proxy_environment(),
+        "public_egress": None,
+        "findings": [],
+    }
+
+    combined_output = ""
+    for tool, args in command_plan:
+        key = f"{tool} {' '.join(args)}"
+        result = command_output(tool, args, timeout)
+        results["commands"][key] = result
+        print(f"\n[{key}]")
+        if not result["installed"]:
+            print(f"[missing] {tool}")
+            if tool in INSTALL_HINTS:
+                print(install_hint_text(tool))
+            continue
+        output = str(result.get("stdout", "")).strip() or str(result.get("stderr", "")).strip()
+        combined_output += "\n" + output.lower()
+        print(output if output else "No output.")
+
+    proxy_env = results["proxy_environment"]
+    print("\n[Proxy environment]")
+    if proxy_env:
+        for name, value in proxy_env.items():
+            print(f"{name}={value}")
+    else:
+        print("No HTTP(S)/SOCKS proxy environment variables are set.")
+
+    public_result = public_ip_lookup(endpoint, timeout=timeout) if include_public else None
+    results["public_egress"] = public_result
+    if not include_public:
+        print("\n[i] Public egress IP lookup skipped. Add --public to query the configured endpoint.")
+
+    findings: list[dict[str, object]] = []
+    if not proxy_env:
+        findings.append(
+            {
+                "severity": "info",
+                "type": "no_proxy_env",
+                "detail": "No proxy environment variables are set for shell-launched tools.",
+            }
+        )
+    if not any(marker in combined_output for marker in ("tun0", "wg0", "wireguard", "openvpn")):
+        findings.append(
+            {
+                "severity": "info",
+                "type": "no_obvious_vpn_interface",
+                "detail": "No obvious tun/wg/OpenVPN indicator was observed in local command output.",
+            }
+        )
+    if "nameserver" in combined_output or "dns servers" in combined_output:
+        findings.append(
+            {
+                "severity": "info",
+                "type": "dns_review_required",
+                "detail": "Review DNS servers for possible DNS leaks when using VPN or privacy tooling.",
+            }
+        )
+
+    results["findings"] = findings
+    print("\n[Privacy review notes]")
+    for finding in findings:
+        print(f"[{finding['severity'].upper()}] {finding['type']}: {finding['detail']}")
+
+    recommendations = [
+        "Use privacy tooling only for lawful privacy or authorized assessment infrastructure.",
+        "Document approved egress IPs in the rules of engagement.",
+        "Verify public IP and DNS behavior before an assessment starts.",
+        "Use a VPN kill switch where appropriate.",
+        "Keep client logging and authorization requirements intact.",
+    ]
+    print("\n[Recommendations]")
+    for item in recommendations:
+        print(f"  - {item}")
+    results["recommendations"] = recommendations
+    return results
+
+
 def vuln_lookup(query: str, timeout: float) -> dict[str, object]:
     if not query.strip():
         raise ValueError("Search query cannot be empty.")
@@ -3409,7 +3627,7 @@ def print_roadmap(category: str | None = None) -> dict[str, object]:
         for item in details["implemented"]:
             print(f"    - {item}")
 
-        if key in {"passwords", "exploitation", "awareness", "post", "wireless"}:
+        if key in {"passwords", "exploitation", "awareness", "post", "wireless", "privacy"}:
             print("  Safety boundary: use dedicated labs and do not target real users or third-party systems.")
 
     return payload
@@ -3798,6 +4016,15 @@ def build_parser() -> argparse.ArgumentParser:
     wifi_scan_parser.add_argument("--timeout", type=float, default=15.0, help="Command timeout in seconds.")
     wifi_scan_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
+    privacy_parser = subparsers.add_parser("privacy-methods", help="Show lawful IP privacy methods and boundaries.")
+    privacy_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    ip_privacy_parser = subparsers.add_parser("ip-privacy-check", help="Review local egress, proxy, VPN, and DNS privacy indicators.")
+    ip_privacy_parser.add_argument("--public", action="store_true", help="Query the public egress IP endpoint.")
+    ip_privacy_parser.add_argument("--endpoint", default="https://api.ipify.org", help="Public egress IP endpoint.")
+    ip_privacy_parser.add_argument("--timeout", type=float, default=8.0, help="Command/request timeout in seconds.")
+    ip_privacy_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
     vuln_parser = subparsers.add_parser("vuln-lookup", help="Search local Exploit-DB metadata with searchsploit.")
     add_common_run_options(vuln_parser)
     vuln_parser.add_argument("query", help="Product, CVE, or service/version query.")
@@ -3935,6 +4162,9 @@ def interactive_menu() -> None:
             elif choice == "23":
                 interactive_external_runner()
             elif choice == "24":
+                include_public = input("Query public egress IP? [y/N]: ").strip().lower() in {"y", "yes"}
+                ip_privacy_check(include_public=include_public, endpoint="https://api.ipify.org", timeout=8.0)
+            elif choice == "25":
                 print_exit_screen("Session closed from the interactive menu.", 0)
                 break
             else:
@@ -4029,6 +4259,10 @@ def main(argv: list[str] | None = None) -> int:
             results = wifi_security_check(interface=args.interface, scan=args.scan, timeout=args.timeout)
         elif args.command == "wifi-scan":
             results = wifi_scan(rescan=not args.no_rescan, timeout=args.timeout)
+        elif args.command == "privacy-methods":
+            results = privacy_methods()
+        elif args.command == "ip-privacy-check":
+            results = ip_privacy_check(include_public=args.public, endpoint=args.endpoint, timeout=args.timeout)
         elif args.command == "external-examples":
             results = print_external_tool_examples()
         else:
@@ -4192,6 +4426,8 @@ def main(argv: list[str] | None = None) -> int:
             "linux-audit",
             "wifi-check",
             "wifi-scan",
+            "privacy-methods",
+            "ip-privacy-check",
             "external-examples",
         }:
             pass

@@ -40,6 +40,9 @@ ktool smtp-check mail.example.com --port 587 --starttls --yes-i-am-authorized
 ktool wifi-check
 ktool wifi-check --interface wlan0 --scan
 ktool wifi-scan
+ktool privacy-methods
+ktool ip-privacy-check
+ktool ip-privacy-check --public
 ktool setoolkit-info
 ```
 
