@@ -37,6 +37,9 @@ ktool ports 127.0.0.1 --ports 22,80,443 --yes-i-am-authorized
 ktool email-check admin@example.com --yes-i-am-authorized
 ktool email-domain example.com --dkim-selector default --yes-i-am-authorized
 ktool smtp-check mail.example.com --port 587 --starttls --yes-i-am-authorized
+ktool wifi-check
+ktool wifi-check --interface wlan0 --scan
+ktool wifi-scan
 ktool setoolkit-info
 ```
 

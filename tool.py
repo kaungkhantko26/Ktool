@@ -236,7 +236,7 @@ def print_menu_panel() -> None:
         ("10", "Conservative nmap Scan"),
         ("11", "Password Policy Audit"),
         ("12", "Packet Capture Sample"),
-        ("13", "Wireless Interface Info"),
+        ("13", "WiFi Security Check"),
         ("14", "Vulnerability Lookup"),
         ("15", "Awareness Plan"),
         ("16", "Local Posture Review"),
@@ -359,9 +359,9 @@ TOOL_CATEGORIES = {
     },
     "wireless": {
         "title": "Wireless Security",
-        "skills": ["WiFi audit on owned networks only", "Capture analysis"],
-        "tools": ["aircrack-ng", "airodump-ng", "kismet", "iw", "nmcli"],
-        "implemented": ["wireless-info", "tools"],
+        "skills": ["WiFi audit on owned networks only", "Interface inventory", "Encryption posture review", "Capture analysis"],
+        "tools": ["aircrack-ng", "airodump-ng", "kismet", "iw", "nmcli", "ip"],
+        "implemented": ["wireless-info", "wifi-check", "wifi-scan", "tools"],
     },
     "exploitation": {
         "title": "Exploitation Research",
@@ -404,6 +404,7 @@ TOOL_ALIASES = {
     "host": ["host"],
     "swaks": ["swaks"],
     "checkdmarc": ["checkdmarc"],
+    "ip": ["ip"],
     "retire": ["retire"],
     "trufflehog": ["trufflehog"],
     "semgrep": ["semgrep"],
@@ -453,6 +454,11 @@ INSTALL_HINTS = {
         "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install network-manager",
         "Arch": "sudo pacman -S networkmanager",
         "Fedora": "sudo dnf install NetworkManager",
+    },
+    "ip": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install iproute2",
+        "Arch": "sudo pacman -S iproute2",
+        "Fedora": "sudo dnf install iproute",
     },
     "setoolkit": {
         "Kali": "sudo apt update && sudo apt install set",
@@ -727,6 +733,7 @@ INSTALL_PACKAGES = {
         "nikto": "nikto",
         "iw": "iw",
         "nmcli": "network-manager",
+        "ip": "iproute2",
         "searchsploit": "exploitdb",
         "masscan": "masscan",
         "nc": "netcat-openbsd",
@@ -775,6 +782,7 @@ INSTALL_PACKAGES = {
         "tcpdump": "tcpdump",
         "iw": "iw",
         "nmcli": "networkmanager",
+        "ip": "iproute2",
         "masscan": "masscan",
         "nc": "openbsd-netcat",
         "hydra": "hydra",
@@ -806,6 +814,7 @@ INSTALL_PACKAGES = {
         "tcpdump": "tcpdump",
         "iw": "iw",
         "nmcli": "NetworkManager",
+        "ip": "iproute",
         "masscan": "masscan",
         "nc": "nmap-ncat",
         "hashcat": "hashcat",
@@ -2635,6 +2644,224 @@ def wireless_info() -> dict[str, object]:
     return results
 
 
+def command_output(tool: str, args: list[str], timeout: float) -> dict[str, object]:
+    tool_path = find_tool(tool)
+    if not tool_path:
+        return {"tool": tool, "installed": False, "stdout": "", "stderr": ""}
+    command = [tool_path, *args]
+    result = run_external(command, timeout=timeout)
+    return {
+        "tool": tool,
+        "installed": True,
+        "command": command,
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+
+
+def parse_nmcli_wifi_rows(output: str) -> list[dict[str, object]]:
+    networks: list[dict[str, object]] = []
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split(":")
+        while len(parts) < 6:
+            parts.append("")
+        in_use, ssid, security, signal, frequency, channel = parts[:6]
+        try:
+            signal_value: int | None = int(signal) if signal else None
+        except ValueError:
+            signal_value = None
+        networks.append(
+            {
+                "in_use": in_use.strip() == "*",
+                "ssid": ssid.strip() or "<hidden>",
+                "security": security.strip(),
+                "signal": signal_value,
+                "frequency": frequency.strip(),
+                "channel": channel.strip(),
+            }
+        )
+    return networks
+
+
+def classify_wifi_security(security: str) -> tuple[str, str]:
+    value = security.upper().strip()
+    if not value or value == "--":
+        return "high", "Open network: no WiFi encryption advertised."
+    if "WEP" in value:
+        return "high", "WEP is obsolete and should not be used."
+    if "WPA1" in value or value == "WPA":
+        return "medium", "WPA1/TKIP-era security is legacy and should be replaced."
+    if "WPA3" in value:
+        return "info", "WPA3-capable network observed."
+    if "WPA2" in value:
+        return "info", "WPA2 network observed."
+    return "low", f"Review advertised WiFi security: {security}"
+
+
+def wifi_scan(rescan: bool, timeout: float) -> dict[str, object]:
+    print("\n[+] WiFi network scan")
+    print("[i] Read-only scan using NetworkManager. It does not capture handshakes or test passwords.")
+
+    nmcli_result = command_output(
+        "nmcli",
+        ["-t", "-f", "IN-USE,SSID,SECURITY,SIGNAL,FREQ,CHAN", "device", "wifi", "list", "--rescan", "yes" if rescan else "no"],
+        timeout,
+    )
+    if not nmcli_result["installed"]:
+        print("[missing] nmcli")
+        print(install_hint_text("nmcli"))
+        return {"networks": [], "nmcli": nmcli_result}
+
+    if nmcli_result.get("stderr"):
+        stderr = str(nmcli_result["stderr"]).strip()
+        if stderr:
+            print(stderr, file=sys.stderr)
+
+    networks = parse_nmcli_wifi_rows(str(nmcli_result.get("stdout", "")))
+    if not networks:
+        print("[i] No WiFi networks returned by nmcli.")
+    else:
+        print("[SSID] Security | Signal | Channel")
+        for network in networks[:80]:
+            marker = "*" if network["in_use"] else " "
+            print(
+                f"{marker} {network['ssid']} | {network['security'] or 'OPEN'} | "
+                f"{network['signal'] if network['signal'] is not None else '?'} | {network['channel'] or '?'}"
+            )
+        if len(networks) > 80:
+            print(f"[i] Showing first 80 networks out of {len(networks)}.")
+
+    findings: list[dict[str, object]] = []
+    for network in networks:
+        severity, detail = classify_wifi_security(str(network["security"]))
+        if severity in {"high", "medium"}:
+            findings.append(
+                {
+                    "severity": severity,
+                    "type": "weak_wifi_security",
+                    "ssid": network["ssid"],
+                    "detail": detail,
+                }
+            )
+
+    if findings:
+        print("\n[Potential WiFi issues]")
+        for finding in findings[:30]:
+            print(f"[{finding['severity'].upper()}] {finding['ssid']}: {finding['detail']}")
+    else:
+        print("\n[OK] No open/WEP/WPA1 networks were highlighted by the scan.")
+
+    return {"networks": networks, "findings": findings, "nmcli": nmcli_result}
+
+
+def wifi_security_check(interface: str | None, scan: bool, timeout: float) -> dict[str, object]:
+    print("\n[+] WiFi security checker")
+    print("[i] Defensive/read-only mode. Ktool does not enable monitor mode, capture handshakes, deauth clients, or crack keys.")
+
+    results: dict[str, object] = {
+        "interface": interface,
+        "commands": {},
+        "scan": None,
+        "findings": [],
+    }
+
+    command_plan: list[tuple[str, list[str]]] = [
+        ("nmcli", ["device", "status"]),
+        ("nmcli", ["-t", "-f", "NAME,TYPE,DEVICE", "connection", "show", "--active"]),
+        ("ip", ["route"]),
+    ]
+    if find_tool("resolvectl"):
+        command_plan.append(("resolvectl", ["status"]))
+    elif find_tool("systemd-resolve"):
+        command_plan.append(("systemd-resolve", ["--status"]))
+    command_plan.append(("iw", ["dev"]))
+    if interface:
+        command_plan.append(("iw", ["dev", interface, "link"]))
+
+    for tool, args in command_plan:
+        key = f"{tool} {' '.join(args)}"
+        result = command_output(tool, args, timeout)
+        results["commands"][key] = result
+        print(f"\n[{key}]")
+        if not result["installed"]:
+            print(f"[missing] {tool}")
+            if tool in INSTALL_HINTS:
+                print(install_hint_text(tool))
+            continue
+        output = str(result.get("stdout", "")).strip() or str(result.get("stderr", "")).strip()
+        print(output if output else "No output.")
+
+    active_wifi = command_output("nmcli", ["-t", "-f", "ACTIVE,SSID,SECURITY,SIGNAL,FREQ,CHAN", "device", "wifi", "list", "--rescan", "no"], timeout)
+    active_networks = [
+        network
+        for network in parse_nmcli_wifi_rows(str(active_wifi.get("stdout", "")))
+        if network.get("in_use")
+    ]
+    results["active_wifi"] = active_networks
+    results["commands"]["nmcli active wifi"] = active_wifi
+
+    findings: list[dict[str, object]] = []
+    if active_networks:
+        print("\n[Active WiFi]")
+        for network in active_networks:
+            severity, detail = classify_wifi_security(str(network["security"]))
+            print(
+                f"* {network['ssid']} | {network['security'] or 'OPEN'} | "
+                f"signal {network['signal'] if network['signal'] is not None else '?'} | channel {network['channel'] or '?'}"
+            )
+            if severity in {"high", "medium"}:
+                findings.append(
+                    {
+                        "severity": severity,
+                        "type": "active_wifi_weak_security",
+                        "ssid": network["ssid"],
+                        "detail": detail,
+                    }
+                )
+            if network.get("signal") is not None and int(network["signal"]) < 30:
+                findings.append(
+                    {
+                        "severity": "low",
+                        "type": "weak_signal",
+                        "ssid": network["ssid"],
+                        "detail": "Low WiFi signal can cause instability and roaming problems.",
+                    }
+                )
+    else:
+        print("\n[i] No active WiFi connection found through nmcli.")
+
+    scan_result = wifi_scan(rescan=True, timeout=timeout) if scan else None
+    results["scan"] = scan_result
+    if scan_result:
+        findings.extend(scan_result.get("findings", []))
+
+    results["findings"] = findings
+    if findings:
+        print("\n[WiFi security summary]")
+        for finding in findings[:40]:
+            label = finding.get("ssid", finding.get("type"))
+            print(f"[{finding['severity'].upper()}] {label}: {finding['detail']}")
+    else:
+        print("\n[OK] No obvious WiFi security issues found from read-only checks.")
+
+    recommendations = [
+        "Use WPA3-Personal/Enterprise where possible; WPA2-AES is the minimum practical baseline.",
+        "Disable open, WEP, and WPA1/TKIP networks.",
+        "Use a strong unique WiFi passphrase or 802.1X for enterprise networks.",
+        "Keep router/AP firmware updated.",
+        "Separate guest WiFi from internal systems.",
+        "Disable WPS if it is enabled.",
+    ]
+    print("\n[Recommendations]")
+    for item in recommendations:
+        print(f"  - {item}")
+    results["recommendations"] = recommendations
+    return results
+
+
 def vuln_lookup(query: str, timeout: float) -> dict[str, object]:
     if not query.strip():
         raise ValueError("Search query cannot be empty.")
@@ -3560,6 +3787,17 @@ def build_parser() -> argparse.ArgumentParser:
     wireless_parser = subparsers.add_parser("wireless-info", help="Show read-only wireless/network interface information.")
     add_common_run_options(wireless_parser)
 
+    wifi_check_parser = subparsers.add_parser("wifi-check", help="Run a read-only WiFi security posture check.")
+    wifi_check_parser.add_argument("--interface", help="Optional wireless interface, for example wlan0.")
+    wifi_check_parser.add_argument("--scan", action="store_true", help="Include a read-only visible network scan with nmcli.")
+    wifi_check_parser.add_argument("--timeout", type=float, default=10.0, help="Command timeout in seconds.")
+    wifi_check_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    wifi_scan_parser = subparsers.add_parser("wifi-scan", help="List visible WiFi networks and highlight weak encryption.")
+    wifi_scan_parser.add_argument("--no-rescan", action="store_true", help="Use cached NetworkManager results.")
+    wifi_scan_parser.add_argument("--timeout", type=float, default=15.0, help="Command timeout in seconds.")
+    wifi_scan_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
     vuln_parser = subparsers.add_parser("vuln-lookup", help="Search local Exploit-DB metadata with searchsploit.")
     add_common_run_options(vuln_parser)
     vuln_parser.add_argument("query", help="Product, CVE, or service/version query.")
@@ -3652,7 +3890,9 @@ def interactive_menu() -> None:
                 output = input("Output pcap [capture.pcap]: ").strip() or "capture.pcap"
                 packet_capture(interface, duration=20, count=100, output=output)
             elif choice == "13":
-                wireless_info()
+                interface = input("Wireless interface [optional]: ").strip() or None
+                include_scan = input("Include visible network scan? [y/N]: ").strip().lower() in {"y", "yes"}
+                wifi_security_check(interface=interface, scan=include_scan, timeout=10.0)
             elif choice == "14":
                 query = input("Searchsploit query (product/CVE/service): ").strip()
                 vuln_lookup(query, timeout=30.0)
@@ -3785,6 +4025,10 @@ def main(argv: list[str] | None = None) -> int:
             results = local_posture()
         elif args.command == "linux-audit":
             results = run_linux_audit(split_tool_list(args.tools, ["lynis", "chkrootkit", "rkhunter"]), timeout=args.timeout)
+        elif args.command == "wifi-check":
+            results = wifi_security_check(interface=args.interface, scan=args.scan, timeout=args.timeout)
+        elif args.command == "wifi-scan":
+            results = wifi_scan(rescan=not args.no_rescan, timeout=args.timeout)
         elif args.command == "external-examples":
             results = print_external_tool_examples()
         else:
@@ -3946,6 +4190,8 @@ def main(argv: list[str] | None = None) -> int:
             "setoolkit-info",
             "local-posture",
             "linux-audit",
+            "wifi-check",
+            "wifi-scan",
             "external-examples",
         }:
             pass
