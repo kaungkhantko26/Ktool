@@ -208,7 +208,8 @@ def print_menu_panel() -> None:
         ("19", "SEToolkit Info"),
         ("20", "Clear Screen"),
         ("21", "Restart Console"),
-        ("22", "Exit"),
+        ("22", "External Tool Examples"),
+        ("23", "Exit"),
     ]
     width = 45
     border = "+" + "-" * width + "+"
@@ -226,20 +227,65 @@ TOOL_CATEGORIES = {
     "recon": {
         "title": "Reconnaissance",
         "skills": ["DNS lookup", "WHOIS lookup", "Subdomain discovery"],
-        "tools": ["whois", "nslookup", "theHarvester", "amass", "sublist3r"],
-        "implemented": ["dns", "whois", "subs"],
+        "tools": [
+            "whois",
+            "nslookup",
+            "theHarvester",
+            "amass",
+            "sublist3r",
+            "subfinder",
+            "assetfinder",
+            "dnsrecon",
+            "dnsenum",
+        ],
+        "implemented": ["dns", "whois", "subs", "dns-enum", "passive-assets"],
     },
     "scan": {
         "title": "Scanning and Enumeration",
         "skills": ["TCP scanning", "Service detection", "Basic web exposure checks"],
-        "tools": ["nmap", "masscan", "nc", "nikto"],
-        "implemented": ["ports", "nmap"],
+        "tools": ["nmap", "masscan", "nc", "nikto", "rustscan", "enum4linux-ng", "smbclient", "snmpwalk"],
+        "implemented": ["ports", "nmap", "fast-scan", "smb-enum", "snmp-enum"],
     },
     "web": {
         "title": "Web Application Testing",
         "skills": ["Security headers", "Common path discovery", "Proxy-based manual testing"],
-        "tools": ["burpsuite", "zaproxy", "sqlmap", "ffuf", "nikto", "searchsploit"],
-        "implemented": ["headers", "dirs", "web", "web-vuln-search"],
+        "tools": [
+            "burpsuite",
+            "zaproxy",
+            "sqlmap",
+            "ffuf",
+            "gobuster",
+            "feroxbuster",
+            "nikto",
+            "searchsploit",
+            "whatweb",
+            "httpx",
+            "nuclei",
+            "wapiti",
+            "testssl.sh",
+            "sslscan",
+            "wafw00f",
+            "waybackurls",
+            "gau",
+            "katana",
+            "hakrawler",
+            "dalfox",
+            "xsstrike",
+            "gowitness",
+            "aquatone",
+        ],
+        "implemented": [
+            "headers",
+            "dirs",
+            "web",
+            "web-vuln-search",
+            "fingerprint",
+            "tls-audit",
+            "content-discovery",
+            "url-discovery",
+            "web-scan",
+            "screenshot-audit",
+        ],
     },
     "passwords": {
         "title": "Password Security Testing",
@@ -250,8 +296,8 @@ TOOL_CATEGORIES = {
     "network": {
         "title": "Network Security Testing",
         "skills": ["TCP/IP", "Ports", "Firewalls", "VPNs", "Packet capture"],
-        "tools": ["wireshark", "tcpdump", "ettercap"],
-        "implemented": ["capture", "tools"],
+        "tools": ["wireshark", "tcpdump", "ettercap", "traceroute", "mtr", "arp-scan"],
+        "implemented": ["capture", "network-diagnostics", "local-network-discovery", "tools"],
     },
     "wireless": {
         "title": "Wireless Security",
@@ -274,8 +320,8 @@ TOOL_CATEGORIES = {
     "post": {
         "title": "Post-Exploitation Defense Review",
         "skills": ["Privilege escalation concepts", "Incident response perspective"],
-        "tools": ["linpeas", "winpeas"],
-        "implemented": ["local-posture"],
+        "tools": ["linpeas", "winpeas", "lynis", "chkrootkit", "rkhunter"],
+        "implemented": ["local-posture", "linux-audit"],
     },
 }
 
@@ -290,6 +336,12 @@ TOOL_ALIASES = {
     "theHarvester": ["theHarvester", "theharvester"],
     "linpeas": ["linpeas", "linpeas.sh"],
     "nikto": ["nikto", "nikto.pl"],
+    "testssl.sh": ["testssl.sh", "testssl"],
+    "httpx": ["httpx", "httpx-toolkit"],
+    "xsstrike": ["xsstrike", "XSStrike"],
+    "gowitness": ["gowitness"],
+    "enum4linux-ng": ["enum4linux-ng", "enum4linux-ng.py"],
+    "arp-scan": ["arp-scan"],
 }
 
 INSTALL_HINTS = {
@@ -334,6 +386,216 @@ INSTALL_HINTS = {
         "GitHub": "git clone https://github.com/trustedsec/social-engineer-toolkit",
         "Manual setup": "cd social-engineer-toolkit && sudo pip3 install -r requirements.txt && sudo python3 setup.py",
         "Safety": "Use only for approved awareness training in isolated labs. Ktool does not run SET attack modules.",
+    },
+    "masscan": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install masscan",
+        "Arch": "sudo pacman -S masscan",
+        "Fedora": "sudo dnf install masscan",
+    },
+    "nc": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install netcat-openbsd",
+        "Arch": "sudo pacman -S openbsd-netcat",
+        "Fedora": "sudo dnf install nmap-ncat",
+    },
+    "theHarvester": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install theharvester",
+        "Python": "python3 -m pip install theHarvester",
+    },
+    "sublist3r": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install sublist3r",
+        "Python": "python3 -m pip install sublist3r",
+    },
+    "burpsuite": {
+        "Kali": "sudo apt update && sudo apt install burpsuite",
+        "Download": "https://portswigger.net/burp/communitydownload",
+    },
+    "zaproxy": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install zaproxy",
+        "Download": "https://www.zaproxy.org/download/",
+    },
+    "sqlmap": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install sqlmap",
+        "Python": "python3 -m pip install sqlmap",
+        "Safety": "Use only for authorized validation. Ktool does not automate SQL injection exploitation.",
+    },
+    "hydra": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install hydra",
+        "Arch": "sudo pacman -S hydra",
+        "Safety": "Use only in labs. Ktool does not run password attacks.",
+    },
+    "john": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install john",
+        "Arch": "sudo pacman -S john",
+    },
+    "hashcat": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install hashcat",
+        "Arch": "sudo pacman -S hashcat",
+    },
+    "wireshark": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install wireshark",
+        "Arch": "sudo pacman -S wireshark-qt",
+    },
+    "ettercap": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install ettercap-graphical",
+        "Arch": "sudo pacman -S ettercap",
+        "Safety": "Use only on owned lab networks. Ktool does not run MITM attacks.",
+    },
+    "aircrack-ng": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install aircrack-ng",
+        "Arch": "sudo pacman -S aircrack-ng",
+    },
+    "airodump-ng": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install aircrack-ng",
+        "Arch": "sudo pacman -S aircrack-ng",
+    },
+    "kismet": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install kismet",
+        "Arch": "sudo pacman -S kismet",
+    },
+    "msfconsole": {
+        "Kali": "sudo apt update && sudo apt install metasploit-framework",
+        "Download": "https://docs.metasploit.com/docs/using-metasploit/getting-started/nightly-installers.html",
+        "Safety": "Use only in controlled labs. Ktool does not run Metasploit modules.",
+    },
+    "linpeas": {
+        "GitHub": "Download from https://github.com/peass-ng/PEASS-ng/releases",
+        "Safety": "Use on your own hosts or authorized assessments only.",
+    },
+    "winpeas": {
+        "GitHub": "Download from https://github.com/peass-ng/PEASS-ng/releases",
+        "Safety": "Use on your own hosts or authorized assessments only.",
+    },
+    "whatweb": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install whatweb",
+        "Arch": "sudo pacman -S whatweb",
+        "Fedora": "sudo dnf install whatweb",
+    },
+    "httpx": {
+        "Go install": "go install github.com/projectdiscovery/httpx/cmd/httpx@latest",
+        "Kali": "sudo apt update && sudo apt install httpx-toolkit",
+    },
+    "nuclei": {
+        "Go install": "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
+        "Templates": "nuclei -update-templates",
+    },
+    "wapiti": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install wapiti",
+        "Python": "python3 -m pip install wapiti3",
+    },
+    "testssl.sh": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install testssl.sh",
+        "GitHub": "git clone https://github.com/drwetter/testssl.sh",
+    },
+    "sslscan": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install sslscan",
+        "Arch": "sudo pacman -S sslscan",
+        "Fedora": "sudo dnf install sslscan",
+    },
+    "gobuster": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install gobuster",
+        "Go install": "go install github.com/OJ/gobuster/v3@latest",
+    },
+    "ffuf": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install ffuf",
+        "Go install": "go install github.com/ffuf/ffuf/v2@latest",
+    },
+    "feroxbuster": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install feroxbuster",
+        "Cargo": "cargo install feroxbuster",
+    },
+    "dnsrecon": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install dnsrecon",
+        "Python": "python3 -m pip install dnsrecon",
+    },
+    "dnsenum": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install dnsenum",
+    },
+    "amass": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install amass",
+        "Go install": "go install github.com/owasp-amass/amass/v4/...@master",
+    },
+    "subfinder": {
+        "Go install": "go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+    },
+    "assetfinder": {
+        "Go install": "go install github.com/tomnomnom/assetfinder@latest",
+    },
+    "waybackurls": {
+        "Go install": "go install github.com/tomnomnom/waybackurls@latest",
+    },
+    "gau": {
+        "Go install": "go install github.com/lc/gau/v2/cmd/gau@latest",
+    },
+    "katana": {
+        "Go install": "go install github.com/projectdiscovery/katana/cmd/katana@latest",
+    },
+    "hakrawler": {
+        "Go install": "go install github.com/hakluke/hakrawler@latest",
+    },
+    "rustscan": {
+        "Debian package": "Download a release from https://github.com/RustScan/RustScan/releases",
+        "Cargo": "cargo install rustscan",
+    },
+    "enum4linux-ng": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install enum4linux-ng",
+        "GitHub": "git clone https://github.com/cddmp/enum4linux-ng",
+    },
+    "smbclient": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install smbclient",
+        "Arch": "sudo pacman -S smbclient",
+        "Fedora": "sudo dnf install samba-client",
+    },
+    "snmpwalk": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install snmp",
+        "Arch": "sudo pacman -S net-snmp",
+        "Fedora": "sudo dnf install net-snmp-utils",
+    },
+    "traceroute": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install traceroute",
+        "Arch": "sudo pacman -S traceroute",
+        "Fedora": "sudo dnf install traceroute",
+    },
+    "mtr": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install mtr",
+        "Arch": "sudo pacman -S mtr",
+        "Fedora": "sudo dnf install mtr",
+    },
+    "arp-scan": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install arp-scan",
+        "Arch": "sudo pacman -S arp-scan",
+        "Fedora": "sudo dnf install arp-scan",
+    },
+    "lynis": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install lynis",
+        "Arch": "sudo pacman -S lynis",
+        "Fedora": "sudo dnf install lynis",
+    },
+    "chkrootkit": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install chkrootkit",
+        "Arch": "sudo pacman -S chkrootkit",
+    },
+    "rkhunter": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install rkhunter",
+        "Arch": "sudo pacman -S rkhunter",
+        "Fedora": "sudo dnf install rkhunter",
+    },
+    "wafw00f": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install wafw00f",
+        "Python": "python3 -m pip install wafw00f",
+    },
+    "xsstrike": {
+        "GitHub": "git clone https://github.com/s0md3v/XSStrike",
+        "Setup": "cd XSStrike && python3 -m pip install -r requirements.txt",
+        "Safety": "Use only on authorized web apps and labs.",
+    },
+    "dalfox": {
+        "Go install": "go install github.com/hahwul/dalfox/v2@latest",
+    },
+    "gowitness": {
+        "Go install": "go install github.com/sensepost/gowitness@latest",
+    },
+    "aquatone": {
+        "GitHub releases": "Download from https://github.com/michenriksen/aquatone/releases",
     },
 }
 
@@ -936,7 +1198,31 @@ def print_install_hints(tool: str | None = None) -> dict[str, object]:
     return payload
 
 
-def run_external(command: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+def print_external_tool_examples() -> dict[str, object]:
+    examples = {
+        "fingerprint": "ktool fingerprint https://example.com --tools whatweb,wafw00f,httpx --yes-i-am-authorized",
+        "tls-audit": "ktool tls-audit https://example.com --tools testssl.sh,sslscan --yes-i-am-authorized",
+        "content-discovery": "ktool content-discovery https://example.com --tool ffuf --wordlist /usr/share/wordlists/dirb/common.txt --yes-i-am-authorized",
+        "dns-enum": "ktool dns-enum example.com --tools dnsrecon,subfinder,amass --yes-i-am-authorized",
+        "url-discovery": "ktool url-discovery https://example.com --tools waybackurls,gau,katana --yes-i-am-authorized",
+        "web-scan": "ktool web-scan https://example.com --tool nuclei --rate 20 --yes-i-am-authorized",
+        "fast-scan": "ktool fast-scan 192.168.1.10 --tool rustscan --ports 1-1000 --yes-i-am-authorized",
+        "smb-enum": "ktool smb-enum 192.168.1.10 --tool enum4linux-ng --yes-i-am-authorized",
+        "snmp-enum": "ktool snmp-enum 192.168.1.10 --community public --yes-i-am-authorized",
+        "network-diagnostics": "ktool network-diagnostics example.com --tools traceroute,mtr --yes-i-am-authorized",
+        "local-network-discovery": "ktool local-network-discovery --interface eth0 --yes-i-am-authorized",
+        "linux-audit": "ktool linux-audit --tools lynis,chkrootkit,rkhunter",
+        "screenshot-audit": "ktool screenshot-audit https://example.com --tool gowitness --output screenshots --yes-i-am-authorized",
+    }
+    print("\n[+] External tool wrapper examples")
+    print("[i] Install the underlying Linux tools first with: ktool install-hints <tool>")
+    for name, command in examples.items():
+        print(f"\n{name}:")
+        print(f"  {command}")
+    return examples
+
+
+def run_external(command: list[str], timeout: float, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
             command,
@@ -944,6 +1230,7 @@ def run_external(command: list[str], timeout: float) -> subprocess.CompletedProc
             check=False,
             text=True,
             timeout=timeout,
+            input=input_text,
         )
     except subprocess.TimeoutExpired as error:
         raise TimeoutError(f"Command timed out after {timeout}s: {' '.join(command)}") from error
@@ -954,6 +1241,272 @@ def run_external(command: list[str], timeout: float) -> subprocess.CompletedProc
             stdout="",
             stderr=str(error),
         )
+
+
+def run_tool_command(
+    tool: str,
+    args: list[str],
+    timeout: float,
+    input_text: str | None = None,
+    active: bool = False,
+) -> dict[str, object]:
+    tool_path = find_tool(tool)
+    if not tool_path:
+        print(f"[missing] {tool}")
+        print(install_hint_text(tool))
+        return {"tool": tool, "installed": False}
+
+    command = [tool_path, *args]
+    print(f"\n[+] Running {tool}: {' '.join(command)}")
+    if active:
+        print("[i] Active scanner. Use only on authorized targets and keep rate limits conservative.")
+
+    try:
+        result = run_external(command, timeout=timeout, input_text=input_text)
+    except TimeoutError as error:
+        message = str(error)
+        print(f"[WARN] {message}")
+        return {
+            "tool": tool,
+            "installed": True,
+            "timed_out": True,
+            "timeout_seconds": timeout,
+            "error": message,
+            "command": command,
+        }
+
+    output = result.stdout.strip()
+    if output:
+        print(output)
+    if result.stderr.strip():
+        print(result.stderr.strip(), file=sys.stderr)
+
+    return {
+        "tool": tool,
+        "installed": True,
+        "command": command,
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+
+
+def split_tool_list(value: str | None, defaults: list[str]) -> list[str]:
+    if not value:
+        return defaults
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def host_from_url_or_host(value: str) -> str:
+    parsed = urlparse(value if "://" in value else f"//{value}")
+    return parsed.hostname or value
+
+
+def run_fingerprint(url: str, tools: list[str], timeout: float) -> dict[str, object]:
+    normalized = normalize_url(url)
+    results: dict[str, object] = {"url": normalized, "results": []}
+    for tool in tools:
+        if tool == "whatweb":
+            result = run_tool_command("whatweb", ["--no-errors", normalized], timeout)
+        elif tool == "wafw00f":
+            result = run_tool_command("wafw00f", [normalized], timeout)
+        elif tool == "httpx":
+            result = run_tool_command("httpx", ["-silent", "-title", "-tech-detect", "-status-code"], timeout, input_text=normalized + "\n")
+        else:
+            print(f"[skip] Unsupported fingerprint tool: {tool}")
+            result = {"tool": tool, "supported": False}
+        results["results"].append(result)
+    return results
+
+
+def run_tls_audit(target: str, tools: list[str], timeout: float) -> dict[str, object]:
+    normalized = normalize_url(target) if "://" in target else target
+    host = host_from_url_or_host(normalized)
+    results: dict[str, object] = {"target": normalized, "host": host, "results": []}
+    for tool in tools:
+        if tool == "testssl.sh":
+            result = run_tool_command("testssl.sh", ["--quiet", "--fast", normalized], timeout, active=True)
+        elif tool == "sslscan":
+            result = run_tool_command("sslscan", [host], timeout, active=True)
+        else:
+            print(f"[skip] Unsupported TLS tool: {tool}")
+            result = {"tool": tool, "supported": False}
+        results["results"].append(result)
+    return results
+
+
+def run_content_discovery(
+    url: str,
+    tool: str,
+    wordlist: str,
+    timeout: float,
+    rate: int,
+    extensions: str | None,
+) -> dict[str, object]:
+    normalized = normalize_url(url)
+    if not Path(wordlist).exists():
+        raise ValueError(f"Wordlist not found: {wordlist}")
+
+    if tool == "ffuf":
+        target = normalized.rstrip("/") + "/FUZZ"
+        args = ["-u", target, "-w", wordlist, "-rate", str(rate)]
+        if extensions:
+            args.extend(["-e", extensions])
+    elif tool == "gobuster":
+        args = ["dir", "-u", normalized, "-w", wordlist, "--delay", "100ms"]
+        if extensions:
+            args.extend(["-x", extensions])
+    elif tool == "feroxbuster":
+        args = ["-u", normalized, "-w", wordlist, "--rate-limit", str(rate)]
+        if extensions:
+            args.extend(["-x", extensions])
+    else:
+        raise ValueError(f"Unsupported content discovery tool: {tool}")
+
+    return run_tool_command(tool, args, timeout, active=True)
+
+
+def run_dns_enum(domain: str, tools: list[str], timeout: float) -> dict[str, object]:
+    domain = validate_host(domain).strip(".")
+    results: dict[str, object] = {"domain": domain, "results": []}
+    for tool in tools:
+        if tool == "dnsrecon":
+            result = run_tool_command("dnsrecon", ["-d", domain], timeout, active=True)
+        elif tool == "dnsenum":
+            result = run_tool_command("dnsenum", [domain], timeout, active=True)
+        elif tool == "amass":
+            result = run_tool_command("amass", ["enum", "-passive", "-d", domain], timeout)
+        elif tool == "subfinder":
+            result = run_tool_command("subfinder", ["-silent", "-d", domain], timeout)
+        elif tool == "assetfinder":
+            result = run_tool_command("assetfinder", ["--subs-only", domain], timeout)
+        else:
+            print(f"[skip] Unsupported DNS enum tool: {tool}")
+            result = {"tool": tool, "supported": False}
+        results["results"].append(result)
+    return results
+
+
+def run_passive_assets(domain: str, tools: list[str], timeout: float) -> dict[str, object]:
+    domain = validate_host(domain).strip(".")
+    selected = tools or ["subfinder", "assetfinder", "amass"]
+    return run_dns_enum(domain, selected, timeout)
+
+
+def run_url_discovery(target: str, tools: list[str], timeout: float) -> dict[str, object]:
+    normalized = normalize_url(target)
+    host = host_from_url_or_host(normalized)
+    results: dict[str, object] = {"target": normalized, "host": host, "results": []}
+    for tool in tools:
+        if tool == "waybackurls":
+            result = run_tool_command("waybackurls", [], timeout, input_text=host + "\n")
+        elif tool == "gau":
+            result = run_tool_command("gau", [host], timeout)
+        elif tool == "katana":
+            result = run_tool_command("katana", ["-silent", "-u", normalized, "-d", "2"], timeout, active=True)
+        elif tool == "hakrawler":
+            result = run_tool_command("hakrawler", ["-plain"], timeout, input_text=normalized + "\n", active=True)
+        else:
+            print(f"[skip] Unsupported URL discovery tool: {tool}")
+            result = {"tool": tool, "supported": False}
+        results["results"].append(result)
+    return results
+
+
+def run_web_scan(url: str, tool: str, timeout: float, rate: int) -> dict[str, object]:
+    normalized = normalize_url(url)
+    if tool == "nuclei":
+        args = ["-u", normalized, "-rl", str(rate), "-silent"]
+    elif tool == "wapiti":
+        args = ["-u", normalized, "--scope", "page", "--flush-session"]
+    elif tool == "nikto":
+        return run_nikto_with_timeout(normalized, timeout=timeout)
+    elif tool == "dalfox":
+        args = ["url", normalized, "--silence", "--worker", "5"]
+    elif tool == "xsstrike":
+        args = ["-u", normalized, "--crawl"]
+    else:
+        raise ValueError(f"Unsupported web scanner: {tool}")
+    return run_tool_command(tool, args, timeout, active=True)
+
+
+def run_fast_scan(target: str, tool: str, ports: str, timeout: float) -> dict[str, object]:
+    target = validate_host(target)
+    if tool == "rustscan":
+        args = ["-a", target, "-p", ports, "--ulimit", "5000"]
+    elif tool == "masscan":
+        args = [target, "-p", ports, "--rate", "1000"]
+    else:
+        raise ValueError(f"Unsupported fast scan tool: {tool}")
+    return run_tool_command(tool, args, timeout, active=True)
+
+
+def run_smb_enum(target: str, tool: str, timeout: float) -> dict[str, object]:
+    target = validate_host(target)
+    if tool == "enum4linux-ng":
+        args = ["-A", target]
+    elif tool == "smbclient":
+        args = ["-L", f"//{target}/", "-N"]
+    else:
+        raise ValueError(f"Unsupported SMB tool: {tool}")
+    return run_tool_command(tool, args, timeout, active=True)
+
+
+def run_snmp_enum(target: str, community: str, timeout: float) -> dict[str, object]:
+    target = validate_host(target)
+    return run_tool_command("snmpwalk", ["-v2c", "-c", community, target], timeout, active=True)
+
+
+def run_network_diagnostics(target: str, tools: list[str], timeout: float) -> dict[str, object]:
+    target = validate_host(target)
+    results: dict[str, object] = {"target": target, "results": []}
+    for tool in tools:
+        if tool == "traceroute":
+            result = run_tool_command("traceroute", [target], timeout)
+        elif tool == "mtr":
+            result = run_tool_command("mtr", ["-r", "-c", "10", target], timeout)
+        else:
+            print(f"[skip] Unsupported network diagnostic tool: {tool}")
+            result = {"tool": tool, "supported": False}
+        results["results"].append(result)
+    return results
+
+
+def run_local_network_discovery(interface: str | None, timeout: float) -> dict[str, object]:
+    args = ["--localnet"]
+    if interface:
+        args.extend(["--interface", interface])
+    return run_tool_command("arp-scan", args, timeout, active=True)
+
+
+def run_linux_audit(tools: list[str], timeout: float) -> dict[str, object]:
+    results: dict[str, object] = {"results": []}
+    for tool in tools:
+        if tool == "lynis":
+            result = run_tool_command("lynis", ["audit", "system", "--quick"], timeout)
+        elif tool == "chkrootkit":
+            result = run_tool_command("chkrootkit", [], timeout)
+        elif tool == "rkhunter":
+            result = run_tool_command("rkhunter", ["--check", "--sk"], timeout)
+        else:
+            print(f"[skip] Unsupported Linux audit tool: {tool}")
+            result = {"tool": tool, "supported": False}
+        results["results"].append(result)
+    return results
+
+
+def run_screenshot_audit(url: str, tool: str, timeout: float, output: str) -> dict[str, object]:
+    normalized = normalize_url(url)
+    output_path = Path(output)
+    output_path.mkdir(parents=True, exist_ok=True)
+    if tool == "gowitness":
+        args = ["scan", "single", "--url", normalized, "--screenshot-path", str(output_path)]
+    elif tool == "aquatone":
+        args = ["-out", str(output_path)]
+        return run_tool_command("aquatone", args, timeout, input_text=normalized + "\n", active=True)
+    else:
+        raise ValueError(f"Unsupported screenshot tool: {tool}")
+    return run_tool_command(tool, args, timeout, active=True)
 
 
 def nmap_scan(
@@ -1537,6 +2090,96 @@ def build_parser() -> argparse.ArgumentParser:
     )
     web_vuln_parser.add_argument("--nikto-timeout", type=float, default=900.0, help="Nikto timeout in seconds.")
 
+    fingerprint_parser = subparsers.add_parser("fingerprint", help="Run web fingerprinting wrappers.")
+    add_common_run_options(fingerprint_parser)
+    fingerprint_parser.add_argument("url", help="URL to fingerprint.")
+    fingerprint_parser.add_argument("--tools", default="whatweb,wafw00f,httpx", help="Comma-separated tools.")
+    fingerprint_parser.add_argument("--timeout", type=float, default=60.0, help="Per-tool timeout in seconds.")
+
+    tls_parser = subparsers.add_parser("tls-audit", help="Run TLS/SSL audit wrappers.")
+    add_common_run_options(tls_parser)
+    tls_parser.add_argument("target", help="HTTPS URL or host.")
+    tls_parser.add_argument("--tools", default="testssl.sh,sslscan", help="Comma-separated tools.")
+    tls_parser.add_argument("--timeout", type=float, default=300.0, help="Per-tool timeout in seconds.")
+
+    content_parser = subparsers.add_parser("content-discovery", help="Run content/directory discovery wrappers.")
+    add_common_run_options(content_parser)
+    content_parser.add_argument("url", help="Base URL.")
+    content_parser.add_argument("--tool", choices=["ffuf", "gobuster", "feroxbuster"], default="ffuf")
+    content_parser.add_argument("--wordlist", required=True, help="Wordlist path.")
+    content_parser.add_argument("--extensions", help="Optional extensions, for example php,txt,bak.")
+    content_parser.add_argument("--rate", type=int, default=50, help="Conservative request rate.")
+    content_parser.add_argument("--timeout", type=float, default=300.0, help="Command timeout in seconds.")
+
+    dns_enum_parser = subparsers.add_parser("dns-enum", help="Run DNS/subdomain enumeration wrappers.")
+    add_common_run_options(dns_enum_parser)
+    dns_enum_parser.add_argument("domain", help="Domain to enumerate.")
+    dns_enum_parser.add_argument("--tools", default="dnsrecon,subfinder,assetfinder,amass", help="Comma-separated tools.")
+    dns_enum_parser.add_argument("--timeout", type=float, default=300.0, help="Per-tool timeout in seconds.")
+
+    passive_parser = subparsers.add_parser("passive-assets", help="Run passive asset discovery wrappers.")
+    add_common_run_options(passive_parser)
+    passive_parser.add_argument("domain", help="Domain to enumerate.")
+    passive_parser.add_argument("--tools", default="subfinder,assetfinder,amass", help="Comma-separated tools.")
+    passive_parser.add_argument("--timeout", type=float, default=240.0, help="Per-tool timeout in seconds.")
+
+    url_discovery_parser = subparsers.add_parser("url-discovery", help="Run URL discovery and crawler wrappers.")
+    add_common_run_options(url_discovery_parser)
+    url_discovery_parser.add_argument("url", help="Base URL or domain.")
+    url_discovery_parser.add_argument("--tools", default="waybackurls,gau,katana,hakrawler", help="Comma-separated tools.")
+    url_discovery_parser.add_argument("--timeout", type=float, default=240.0, help="Per-tool timeout in seconds.")
+
+    web_scan_parser = subparsers.add_parser("web-scan", help="Run optional web scanner wrappers.")
+    add_common_run_options(web_scan_parser)
+    web_scan_parser.add_argument("url", help="Target URL.")
+    web_scan_parser.add_argument("--tool", choices=["nuclei", "wapiti", "nikto", "dalfox", "xsstrike"], default="nuclei")
+    web_scan_parser.add_argument("--rate", type=int, default=20, help="Conservative rate limit where supported.")
+    web_scan_parser.add_argument("--timeout", type=float, default=900.0, help="Command timeout in seconds.")
+
+    fast_scan_parser = subparsers.add_parser("fast-scan", help="Run fast port scanner wrappers.")
+    add_common_run_options(fast_scan_parser)
+    fast_scan_parser.add_argument("target", help="Target host/IP.")
+    fast_scan_parser.add_argument("--tool", choices=["rustscan", "masscan"], default="rustscan")
+    fast_scan_parser.add_argument("--ports", default="1-1000", help="Ports or ranges, for example 1-1000.")
+    fast_scan_parser.add_argument("--timeout", type=float, default=240.0, help="Command timeout in seconds.")
+
+    smb_parser = subparsers.add_parser("smb-enum", help="Run SMB enumeration wrappers.")
+    add_common_run_options(smb_parser)
+    smb_parser.add_argument("target", help="Target host/IP.")
+    smb_parser.add_argument("--tool", choices=["enum4linux-ng", "smbclient"], default="enum4linux-ng")
+    smb_parser.add_argument("--timeout", type=float, default=180.0, help="Command timeout in seconds.")
+
+    snmp_parser = subparsers.add_parser("snmp-enum", help="Run SNMP enumeration with snmpwalk.")
+    add_common_run_options(snmp_parser)
+    snmp_parser.add_argument("target", help="Target host/IP.")
+    snmp_parser.add_argument("--community", default="public", help="SNMP community string.")
+    snmp_parser.add_argument("--timeout", type=float, default=120.0, help="Command timeout in seconds.")
+
+    netdiag_parser = subparsers.add_parser("network-diagnostics", help="Run traceroute/mtr diagnostics.")
+    add_common_run_options(netdiag_parser)
+    netdiag_parser.add_argument("target", help="Target host/IP.")
+    netdiag_parser.add_argument("--tools", default="traceroute,mtr", help="Comma-separated tools.")
+    netdiag_parser.add_argument("--timeout", type=float, default=120.0, help="Per-tool timeout in seconds.")
+
+    localnet_parser = subparsers.add_parser("local-network-discovery", help="Run local network discovery with arp-scan.")
+    add_common_run_options(localnet_parser)
+    localnet_parser.add_argument("--interface", help="Optional interface, for example eth0.")
+    localnet_parser.add_argument("--timeout", type=float, default=120.0, help="Command timeout in seconds.")
+
+    linux_audit_parser = subparsers.add_parser("linux-audit", help="Run defensive Linux audit wrappers.")
+    linux_audit_parser.add_argument("--tools", default="lynis,chkrootkit,rkhunter", help="Comma-separated tools.")
+    linux_audit_parser.add_argument("--timeout", type=float, default=600.0, help="Per-tool timeout in seconds.")
+    linux_audit_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    screenshot_parser = subparsers.add_parser("screenshot-audit", help="Run screenshot capture wrappers.")
+    add_common_run_options(screenshot_parser)
+    screenshot_parser.add_argument("url", help="Target URL.")
+    screenshot_parser.add_argument("--tool", choices=["gowitness", "aquatone"], default="gowitness")
+    screenshot_parser.add_argument("--output", default="screenshots", help="Output directory.")
+    screenshot_parser.add_argument("--timeout", type=float, default=240.0, help="Command timeout in seconds.")
+
+    subparsers.add_parser("external-examples", help="Show external tool wrapper examples.")
+
     nmap_parser = subparsers.add_parser("nmap", help="Run a conservative nmap service scan.")
     add_common_run_options(nmap_parser)
     nmap_parser.add_argument("target", help="Hostname or IP address.")
@@ -1691,6 +2334,8 @@ def interactive_menu() -> None:
                 print_startup_banner()
                 print(color("[restarted] Ktool console restarted.", "1;32"))
             elif choice == "22":
+                print_external_tool_examples()
+            elif choice == "23":
                 print_exit_screen("Session closed from the interactive menu.", 0)
                 break
             else:
@@ -1745,6 +2390,10 @@ def main(argv: list[str] | None = None) -> int:
             results = setoolkit_info()
         elif args.command == "local-posture":
             results = local_posture()
+        elif args.command == "linux-audit":
+            results = run_linux_audit(split_tool_list(args.tools, ["lynis", "chkrootkit", "rkhunter"]), timeout=args.timeout)
+        elif args.command == "external-examples":
+            results = print_external_tool_examples()
         else:
             require_authorization(args.yes_i_am_authorized)
 
@@ -1784,6 +2433,63 @@ def main(argv: list[str] | None = None) -> int:
                 use_nikto=args.nikto,
                 nikto_timeout=args.nikto_timeout,
             )
+        elif args.command == "fingerprint":
+            results = run_fingerprint(
+                args.url,
+                tools=split_tool_list(args.tools, ["whatweb", "wafw00f", "httpx"]),
+                timeout=args.timeout,
+            )
+        elif args.command == "tls-audit":
+            results = run_tls_audit(
+                args.target,
+                tools=split_tool_list(args.tools, ["testssl.sh", "sslscan"]),
+                timeout=args.timeout,
+            )
+        elif args.command == "content-discovery":
+            results = run_content_discovery(
+                args.url,
+                tool=args.tool,
+                wordlist=args.wordlist,
+                timeout=args.timeout,
+                rate=args.rate,
+                extensions=args.extensions,
+            )
+        elif args.command == "dns-enum":
+            results = run_dns_enum(
+                args.domain,
+                tools=split_tool_list(args.tools, ["dnsrecon", "subfinder", "assetfinder", "amass"]),
+                timeout=args.timeout,
+            )
+        elif args.command == "passive-assets":
+            results = run_passive_assets(
+                args.domain,
+                tools=split_tool_list(args.tools, ["subfinder", "assetfinder", "amass"]),
+                timeout=args.timeout,
+            )
+        elif args.command == "url-discovery":
+            results = run_url_discovery(
+                args.url,
+                tools=split_tool_list(args.tools, ["waybackurls", "gau", "katana", "hakrawler"]),
+                timeout=args.timeout,
+            )
+        elif args.command == "web-scan":
+            results = run_web_scan(args.url, tool=args.tool, timeout=args.timeout, rate=args.rate)
+        elif args.command == "fast-scan":
+            results = run_fast_scan(args.target, tool=args.tool, ports=args.ports, timeout=args.timeout)
+        elif args.command == "smb-enum":
+            results = run_smb_enum(args.target, tool=args.tool, timeout=args.timeout)
+        elif args.command == "snmp-enum":
+            results = run_snmp_enum(args.target, community=args.community, timeout=args.timeout)
+        elif args.command == "network-diagnostics":
+            results = run_network_diagnostics(
+                args.target,
+                tools=split_tool_list(args.tools, ["traceroute", "mtr"]),
+                timeout=args.timeout,
+            )
+        elif args.command == "local-network-discovery":
+            results = run_local_network_discovery(args.interface, timeout=args.timeout)
+        elif args.command == "screenshot-audit":
+            results = run_screenshot_audit(args.url, tool=args.tool, timeout=args.timeout, output=args.output)
         elif args.command == "nmap":
             results = nmap_scan(
                 args.target,
@@ -1811,6 +2517,8 @@ def main(argv: list[str] | None = None) -> int:
             "awareness-plan",
             "setoolkit-info",
             "local-posture",
+            "linux-audit",
+            "external-examples",
         }:
             pass
         else:

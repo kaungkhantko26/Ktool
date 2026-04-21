@@ -37,6 +37,17 @@ ktool ports 127.0.0.1 --ports 22,80,443 --yes-i-am-authorized
 ktool setoolkit-info
 ```
 
+External tool wrappers:
+
+```bash
+ktool external-examples
+ktool fingerprint https://example.com --tools whatweb,wafw00f,httpx --yes-i-am-authorized
+ktool tls-audit https://example.com --tools testssl.sh,sslscan --yes-i-am-authorized
+ktool dns-enum example.com --tools dnsrecon,subfinder,amass --yes-i-am-authorized
+ktool url-discovery https://example.com --tools waybackurls,gau,katana --yes-i-am-authorized
+ktool web-scan https://example.com --tool nuclei --rate 20 --yes-i-am-authorized
+```
+
 Use Ktool only on systems you own, lab environments, or targets where you have explicit written permission.
 
 ## Deploy Updates
