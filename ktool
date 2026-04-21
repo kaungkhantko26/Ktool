@@ -1,8 +1,28 @@
 #!/usr/bin/env sh
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-if [ "${KTOOL_AUTO_DEPLOY:-0}" = "1" ] && [ -x "$SCRIPT_DIR/update-ktool.sh" ]; then
-  "$SCRIPT_DIR/update-ktool.sh" "Auto deploy Ktool updates" || true
+set -eu
+
+if [ -n "${KTOOL_HOME:-}" ]; then
+  SCRIPT_DIR=$(CDPATH= cd -- "$KTOOL_HOME" && pwd)
+else
+  SOURCE=$0
+  while [ -h "$SOURCE" ]; do
+    DIR=$(CDPATH= cd -- "$(dirname -- "$SOURCE")" && pwd)
+    LINK=$(readlink "$SOURCE")
+    case "$LINK" in
+      /*) SOURCE=$LINK ;;
+      *) SOURCE=$DIR/$LINK ;;
+    esac
+  done
+  SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$SOURCE")" && pwd)
 fi
+
+if [ ! -f "$SCRIPT_DIR/tool.py" ]; then
+  echo "[ERROR] Ktool cannot find tool.py in: $SCRIPT_DIR" >&2
+  echo "        If you copied the launcher, set KTOOL_HOME to your repo path." >&2
+  echo "        Example: export KTOOL_HOME=\"\$HOME/Ktool\"" >&2
+  exit 1
+fi
+
 if [ "$#" -eq 0 ]; then
   exec python3 "$SCRIPT_DIR/tool.py" Ktool
 fi

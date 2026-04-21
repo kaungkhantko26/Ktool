@@ -1,7 +1,20 @@
 #!/usr/bin/env sh
 set -eu
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -n "${KTOOL_HOME:-}" ]; then
+  SCRIPT_DIR=$(CDPATH= cd -- "$KTOOL_HOME" && pwd)
+else
+  SOURCE=$0
+  while [ -h "$SOURCE" ]; do
+    DIR=$(CDPATH= cd -- "$(dirname -- "$SOURCE")" && pwd)
+    LINK=$(readlink "$SOURCE")
+    case "$LINK" in
+      /*) SOURCE=$LINK ;;
+      *) SOURCE=$DIR/$LINK ;;
+    esac
+  done
+  SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$SOURCE")" && pwd)
+fi
 BIN_DIR="${HOME}/.local/bin"
 
 mkdir -p "$BIN_DIR"

@@ -1,10 +1,23 @@
 #!/usr/bin/env sh
 set -eu
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -n "${KTOOL_HOME:-}" ]; then
+  SCRIPT_DIR=$(CDPATH= cd -- "$KTOOL_HOME" && pwd)
+else
+  SOURCE=$0
+  while [ -h "$SOURCE" ]; do
+    DIR=$(CDPATH= cd -- "$(dirname -- "$SOURCE")" && pwd)
+    LINK=$(readlink "$SOURCE")
+    case "$LINK" in
+      /*) SOURCE=$LINK ;;
+      *) SOURCE=$DIR/$LINK ;;
+    esac
+  done
+  SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$SOURCE")" && pwd)
+fi
 cd "$SCRIPT_DIR"
 
-MESSAGE="${1:-Auto deploy Ktool updates}"
+MESSAGE="${1:-Deploy Ktool updates}"
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "[ERROR] Ktool folder is not a Git repository."

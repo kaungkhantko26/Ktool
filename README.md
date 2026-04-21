@@ -74,10 +74,10 @@ Pull the latest Ktool from GitHub:
 update-ktool.sh
 ```
 
-Optional auto-deploy before launch:
+If you copied the launcher scripts instead of installing symlinks, set the repo path:
 
 ```bash
-KTOOL_AUTO_DEPLOY=1 ktool
+export KTOOL_HOME="$HOME/Ktool"
 ```
 
-Auto-deploy is off by default so normal Ktool runs do not create commits unexpectedly.
+Starting `ktool` does not run Git commands. Use `update-ktool.sh` when you want to pull updates, and `./deploy.sh` only when you want to commit and push local changes.
