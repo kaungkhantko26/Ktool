@@ -208,7 +208,7 @@ def print_menu_panel() -> None:
         ("19", "SEToolkit Info"),
         ("20", "Clear Screen"),
         ("21", "Restart Console"),
-        ("22", "External Tool Examples"),
+        ("22", "External Tool Runner"),
         ("23", "Exit"),
     ]
     width = 45
@@ -596,6 +596,99 @@ INSTALL_HINTS = {
     },
     "aquatone": {
         "GitHub releases": "Download from https://github.com/michenriksen/aquatone/releases",
+    },
+}
+
+INSTALL_PACKAGES = {
+    "apt": {
+        "nmap": "nmap",
+        "whois": "whois",
+        "tcpdump": "tcpdump",
+        "nikto": "nikto",
+        "iw": "iw",
+        "nmcli": "network-manager",
+        "searchsploit": "exploitdb",
+        "masscan": "masscan",
+        "nc": "netcat-openbsd",
+        "theHarvester": "theharvester",
+        "sublist3r": "sublist3r",
+        "burpsuite": "burpsuite",
+        "zaproxy": "zaproxy",
+        "sqlmap": "sqlmap",
+        "hydra": "hydra",
+        "john": "john",
+        "hashcat": "hashcat",
+        "wireshark": "wireshark",
+        "ettercap": "ettercap-graphical",
+        "aircrack-ng": "aircrack-ng",
+        "airodump-ng": "aircrack-ng",
+        "kismet": "kismet",
+        "setoolkit": "set",
+        "whatweb": "whatweb",
+        "wapiti": "wapiti",
+        "testssl.sh": "testssl.sh",
+        "sslscan": "sslscan",
+        "gobuster": "gobuster",
+        "ffuf": "ffuf",
+        "feroxbuster": "feroxbuster",
+        "dnsrecon": "dnsrecon",
+        "dnsenum": "dnsenum",
+        "amass": "amass",
+        "smbclient": "smbclient",
+        "snmpwalk": "snmp",
+        "traceroute": "traceroute",
+        "mtr": "mtr",
+        "arp-scan": "arp-scan",
+        "lynis": "lynis",
+        "chkrootkit": "chkrootkit",
+        "rkhunter": "rkhunter",
+        "wafw00f": "wafw00f",
+    },
+    "pacman": {
+        "nmap": "nmap",
+        "whois": "whois",
+        "tcpdump": "tcpdump",
+        "iw": "iw",
+        "nmcli": "networkmanager",
+        "masscan": "masscan",
+        "nc": "openbsd-netcat",
+        "hydra": "hydra",
+        "john": "john",
+        "hashcat": "hashcat",
+        "wireshark": "wireshark-qt",
+        "ettercap": "ettercap",
+        "aircrack-ng": "aircrack-ng",
+        "airodump-ng": "aircrack-ng",
+        "kismet": "kismet",
+        "whatweb": "whatweb",
+        "sslscan": "sslscan",
+        "gobuster": "gobuster",
+        "snmpwalk": "net-snmp",
+        "traceroute": "traceroute",
+        "mtr": "mtr",
+        "arp-scan": "arp-scan",
+        "lynis": "lynis",
+        "chkrootkit": "chkrootkit",
+        "rkhunter": "rkhunter",
+    },
+    "dnf": {
+        "nmap": "nmap",
+        "whois": "whois",
+        "tcpdump": "tcpdump",
+        "iw": "iw",
+        "nmcli": "NetworkManager",
+        "masscan": "masscan",
+        "nc": "nmap-ncat",
+        "hashcat": "hashcat",
+        "sslscan": "sslscan",
+        "smbclient": "samba-client",
+        "snmpwalk": "net-snmp-utils",
+        "traceroute": "traceroute",
+        "mtr": "mtr",
+        "arp-scan": "arp-scan",
+        "lynis": "lynis",
+        "rkhunter": "rkhunter",
+        "wafw00f": "wafw00f",
     },
 }
 
@@ -1220,6 +1313,179 @@ def print_external_tool_examples() -> dict[str, object]:
         print(f"\n{name}:")
         print(f"  {command}")
     return examples
+
+
+def tools_from_category(category: str | None) -> list[str]:
+    if not category:
+        tools: list[str] = []
+        for details in TOOL_CATEGORIES.values():
+            tools.extend(details["tools"])
+        return sorted(set(tools))
+    if category not in TOOL_CATEGORIES:
+        raise ValueError(f"Unknown category: {category}")
+    return sorted(set(TOOL_CATEGORIES[category]["tools"]))
+
+
+def install_tools(
+    manager: str,
+    tools: list[str],
+    execute: bool,
+    timeout: float,
+) -> dict[str, object]:
+    package_map = INSTALL_PACKAGES.get(manager)
+    if not package_map:
+        raise ValueError(f"Unsupported package manager: {manager}")
+
+    packages = sorted({package_map[tool] for tool in tools if tool in package_map})
+    manual = sorted({tool for tool in tools if tool not in package_map})
+
+    if manager == "apt":
+        command = ["sudo", "apt", "update", "&&", "sudo", "apt", "install", "-y", *packages]
+        executable_command = ["sudo", "apt", "install", "-y", *packages]
+        update_command = ["sudo", "apt", "update"]
+    elif manager == "pacman":
+        command = ["sudo", "pacman", "-S", "--needed", *packages]
+        executable_command = command
+        update_command = None
+    else:
+        command = ["sudo", "dnf", "install", "-y", *packages]
+        executable_command = command
+        update_command = None
+
+    print("\n[+] Ktool package install plan")
+    if packages:
+        print(f"[manager] {manager}")
+        print("[packages] " + " ".join(packages))
+        if manager == "apt":
+            print("[command] sudo apt update && sudo apt install -y " + " ".join(packages))
+        else:
+            print("[command] " + " ".join(command))
+    else:
+        print("[i] No package-manager installable tools selected.")
+
+    if manual:
+        print("\n[manual install required]")
+        for tool in manual:
+            print(f"\n{install_hint_text(tool)}")
+
+    result: dict[str, object] = {
+        "manager": manager,
+        "packages": packages,
+        "manual": manual,
+        "executed": False,
+    }
+    if execute and packages:
+        print("\n[+] Executing install command. Sudo may ask for your password.")
+        if update_command:
+            update_result = run_external(update_command, timeout=timeout)
+            result["update"] = {
+                "command": update_command,
+                "returncode": update_result.returncode,
+                "stdout": update_result.stdout,
+                "stderr": update_result.stderr,
+            }
+            if update_result.stdout.strip():
+                print(update_result.stdout.strip())
+            if update_result.stderr.strip():
+                print(update_result.stderr.strip(), file=sys.stderr)
+
+        install_result = run_external(executable_command, timeout=timeout)
+        result["executed"] = True
+        result["install"] = {
+            "command": executable_command,
+            "returncode": install_result.returncode,
+            "stdout": install_result.stdout,
+            "stderr": install_result.stderr,
+        }
+        if install_result.stdout.strip():
+            print(install_result.stdout.strip())
+        if install_result.stderr.strip():
+            print(install_result.stderr.strip(), file=sys.stderr)
+    elif execute:
+        print("[i] Nothing installable through this package manager.")
+    else:
+        print("\n[i] Dry run only. Add --execute to install packages.")
+
+    return result
+
+
+def interactive_external_runner() -> dict[str, object] | None:
+    print("\n[+] External Tool Runner")
+    print("1. Web fingerprint")
+    print("2. TLS audit")
+    print("3. Content discovery")
+    print("4. DNS enum")
+    print("5. URL discovery")
+    print("6. Web scanner")
+    print("7. Fast scan")
+    print("8. SMB enum")
+    print("9. SNMP enum")
+    print("10. Network diagnostics")
+    print("11. Local network discovery")
+    print("12. Linux audit")
+    print("13. Screenshot audit")
+    print("14. Show examples")
+
+    choice = input("Select external runner: ").strip()
+    if choice == "1":
+        url = input("URL: ").strip()
+        tools = split_tool_list(input("Tools [whatweb,wafw00f,httpx]: ").strip(), ["whatweb", "wafw00f", "httpx"])
+        return run_fingerprint(url, tools, timeout=60.0)
+    if choice == "2":
+        target = input("HTTPS URL or host: ").strip()
+        tools = split_tool_list(input("Tools [testssl.sh,sslscan]: ").strip(), ["testssl.sh", "sslscan"])
+        return run_tls_audit(target, tools, timeout=300.0)
+    if choice == "3":
+        url = input("Base URL: ").strip()
+        tool = input("Tool [ffuf/gobuster/feroxbuster] [ffuf]: ").strip() or "ffuf"
+        wordlist = input("Wordlist path: ").strip()
+        extensions = input("Extensions [optional]: ").strip() or None
+        return run_content_discovery(url, tool, wordlist, timeout=300.0, rate=50, extensions=extensions)
+    if choice == "4":
+        domain = input("Domain: ").strip()
+        tools = split_tool_list(input("Tools [dnsrecon,subfinder,assetfinder,amass]: ").strip(), ["dnsrecon", "subfinder", "assetfinder", "amass"])
+        return run_dns_enum(domain, tools, timeout=300.0)
+    if choice == "5":
+        url = input("Base URL/domain: ").strip()
+        tools = split_tool_list(input("Tools [waybackurls,gau,katana,hakrawler]: ").strip(), ["waybackurls", "gau", "katana", "hakrawler"])
+        return run_url_discovery(url, tools, timeout=240.0)
+    if choice == "6":
+        url = input("Target URL: ").strip()
+        tool = input("Tool [nuclei/wapiti/nikto/dalfox/xsstrike] [nuclei]: ").strip() or "nuclei"
+        return run_web_scan(url, tool=tool, timeout=900.0, rate=20)
+    if choice == "7":
+        target = input("Target host/IP: ").strip()
+        tool = input("Tool [rustscan/masscan] [rustscan]: ").strip() or "rustscan"
+        ports = input("Ports [1-1000]: ").strip() or "1-1000"
+        return run_fast_scan(target, tool=tool, ports=ports, timeout=240.0)
+    if choice == "8":
+        target = input("Target host/IP: ").strip()
+        tool = input("Tool [enum4linux-ng/smbclient] [enum4linux-ng]: ").strip() or "enum4linux-ng"
+        return run_smb_enum(target, tool=tool, timeout=180.0)
+    if choice == "9":
+        target = input("Target host/IP: ").strip()
+        community = input("Community [public]: ").strip() or "public"
+        return run_snmp_enum(target, community=community, timeout=120.0)
+    if choice == "10":
+        target = input("Target host/IP: ").strip()
+        tools = split_tool_list(input("Tools [traceroute,mtr]: ").strip(), ["traceroute", "mtr"])
+        return run_network_diagnostics(target, tools, timeout=120.0)
+    if choice == "11":
+        interface = input("Interface [optional]: ").strip() or None
+        return run_local_network_discovery(interface, timeout=120.0)
+    if choice == "12":
+        tools = split_tool_list(input("Tools [lynis,chkrootkit,rkhunter]: ").strip(), ["lynis", "chkrootkit", "rkhunter"])
+        return run_linux_audit(tools, timeout=600.0)
+    if choice == "13":
+        url = input("Target URL: ").strip()
+        tool = input("Tool [gowitness/aquatone] [gowitness]: ").strip() or "gowitness"
+        output = input("Output dir [screenshots]: ").strip() or "screenshots"
+        return run_screenshot_audit(url, tool=tool, timeout=240.0, output=output)
+    if choice == "14":
+        return print_external_tool_examples()
+
+    print("Invalid external runner choice.")
+    return None
 
 
 def run_external(command: list[str], timeout: float, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
@@ -2028,6 +2294,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write JSON report to this path.",
     )
 
+    install_parser = subparsers.add_parser("install-tools", help="Install supported Linux packages for Ktool tools.")
+    install_parser.add_argument(
+        "--manager",
+        choices=sorted(INSTALL_PACKAGES),
+        default="apt",
+        help="Package manager to use.",
+    )
+    install_parser.add_argument(
+        "--category",
+        choices=sorted(TOOL_CATEGORIES),
+        help="Install package-manager tools from one Ktool category.",
+    )
+    install_parser.add_argument(
+        "--tools",
+        help="Comma-separated tool names. Overrides --category.",
+    )
+    install_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Actually run the install command. Without this, Ktool prints a dry-run plan.",
+    )
+    install_parser.add_argument("--timeout", type=float, default=1800.0, help="Install timeout in seconds.")
+    install_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
     dns_parser = subparsers.add_parser("dns", help="Resolve DNS information for a host.")
     add_common_run_options(dns_parser)
     dns_parser.add_argument("domain", help="Domain or hostname to resolve.")
@@ -2334,7 +2624,7 @@ def interactive_menu() -> None:
                 print_startup_banner()
                 print(color("[restarted] Ktool console restarted.", "1;32"))
             elif choice == "22":
-                print_external_tool_examples()
+                interactive_external_runner()
             elif choice == "23":
                 print_exit_screen("Session closed from the interactive menu.", 0)
                 break
@@ -2374,6 +2664,14 @@ def main(argv: list[str] | None = None) -> int:
             results = check_tools(args.category)
         elif args.command == "install-hints":
             results = print_install_hints(args.tool)
+        elif args.command == "install-tools":
+            selected_tools = split_tool_list(args.tools, []) if args.tools else tools_from_category(args.category)
+            results = install_tools(
+                manager=args.manager,
+                tools=selected_tools,
+                execute=args.execute,
+                timeout=args.timeout,
+            )
         elif args.command == "password-audit":
             results = password_audit(
                 args.file,
@@ -2513,6 +2811,7 @@ def main(argv: list[str] | None = None) -> int:
             "roadmap",
             "tools",
             "install-hints",
+            "install-tools",
             "password-audit",
             "awareness-plan",
             "setoolkit-info",
