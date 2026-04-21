@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, unquote, urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 
@@ -142,6 +142,61 @@ ROUTER_CHECKLIST = [
     "Review connected devices and remove unknown clients.",
     "Back up the router configuration after hardening it.",
 ]
+
+URL_SHORTENER_DOMAINS = {
+    "bit.ly",
+    "tinyurl.com",
+    "t.co",
+    "goo.gl",
+    "is.gd",
+    "buff.ly",
+    "ow.ly",
+    "cutt.ly",
+    "rebrand.ly",
+    "shorturl.at",
+    "s.id",
+    "rb.gy",
+    "lnkd.in",
+}
+
+RISKY_DOWNLOAD_EXTENSIONS = {
+    ".apk",
+    ".appinstaller",
+    ".bat",
+    ".cmd",
+    ".com",
+    ".cpl",
+    ".dmg",
+    ".exe",
+    ".hta",
+    ".iso",
+    ".jar",
+    ".js",
+    ".jse",
+    ".lnk",
+    ".msi",
+    ".ps1",
+    ".scr",
+    ".vbe",
+    ".vbs",
+    ".wsf",
+    ".zip",
+}
+
+SENSITIVE_QUERY_KEYS = {
+    "token",
+    "auth",
+    "apikey",
+    "api_key",
+    "key",
+    "password",
+    "passwd",
+    "pass",
+    "session",
+    "sid",
+    "jwt",
+    "code",
+}
 
 SECURITY_HEADERS = {
     "Strict-Transport-Security": "Helps enforce HTTPS for future visits.",
@@ -408,6 +463,7 @@ TOOL_CATEGORIES = {
             "backup-file-check",
             "redirect-check",
             "cookie-audit",
+            "link-check",
         ],
     },
     "email": {
@@ -1809,6 +1865,196 @@ def redirect_check(url: str, timeout: float) -> dict[str, object]:
     for finding in findings:
         print(f"[WARN] {finding}")
     return {"url": normalized, "final_url": final_url, "status": status, "chain": handler.chain, "findings": findings}
+
+
+def registered_domain_hint(hostname: str) -> str:
+    parts = hostname.lower().strip(".").split(".")
+    if len(parts) <= 2:
+        return hostname.lower().strip(".")
+    return ".".join(parts[-2:])
+
+
+def contains_mixed_scripts(value: str) -> bool:
+    has_latin = any("A" <= char <= "Z" or "a" <= char <= "z" for char in value)
+    has_non_ascii_letter = any(ord(char) > 127 and char.isalpha() for char in value)
+    return has_latin and has_non_ascii_letter
+
+
+def add_link_finding(findings: list[dict[str, object]], severity: str, kind: str, detail: str) -> None:
+    weights = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+    findings.append({"severity": severity, "type": kind, "detail": detail, "weight": weights.get(severity, 1)})
+
+
+def static_link_findings(normalized: str) -> tuple[dict[str, object], list[dict[str, object]]]:
+    parsed = urlparse(normalized)
+    host = parsed.hostname or ""
+    host_lower = host.lower().strip(".")
+    path_lower = unquote(parsed.path or "").lower()
+    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    findings: list[dict[str, object]] = []
+
+    try:
+        ascii_host = host_lower.encode("idna").decode("ascii")
+        decoded_host = ascii_host.encode("ascii").decode("idna")
+    except UnicodeError:
+        ascii_host = host_lower
+        decoded_host = host_lower
+        add_link_finding(findings, "medium", "idna_decode_error", "Domain has characters that could not be IDNA-decoded cleanly.")
+
+    if parsed.scheme != "https":
+        add_link_finding(findings, "low", "not_https", "URL does not use HTTPS.")
+    if parsed.username or parsed.password:
+        add_link_finding(findings, "high", "userinfo_in_url", "URL contains username/password-style userinfo before the host.")
+    if "@" in parsed.netloc:
+        add_link_finding(findings, "high", "at_symbol_in_authority", "URL authority contains @, which can hide the real destination.")
+    if host_lower.startswith("xn--") or ".xn--" in host_lower:
+        add_link_finding(findings, "medium", "punycode_domain", f"Punycode domain observed: {ascii_host}")
+    if contains_mixed_scripts(decoded_host):
+        add_link_finding(findings, "medium", "mixed_script_domain", f"Domain mixes Latin and non-ASCII letters: {decoded_host}")
+    if host_lower.count("-") >= 3:
+        add_link_finding(findings, "low", "many_hyphens", "Domain contains many hyphens.")
+    if len(host_lower) >= 45:
+        add_link_finding(findings, "low", "long_domain", "Domain is unusually long.")
+
+    domain_hint = registered_domain_hint(host_lower)
+    if domain_hint in URL_SHORTENER_DOMAINS:
+        add_link_finding(findings, "medium", "url_shortener", f"Known URL shortener domain: {domain_hint}")
+
+    try:
+        ip = ipaddress.ip_address(host_lower)
+        add_link_finding(findings, "medium", "ip_literal_host", f"URL uses an IP address instead of a domain: {ip}")
+        if ip.is_private or ip.is_loopback or ip.is_link_local:
+            add_link_finding(findings, "high", "private_ip_host", "URL points to a private, loopback, or link-local IP address.")
+    except ValueError:
+        pass
+
+    for extension in RISKY_DOWNLOAD_EXTENSIONS:
+        if path_lower.endswith(extension):
+            add_link_finding(findings, "medium", "risky_download_extension", f"Path ends with risky file extension: {extension}")
+            break
+
+    if re.search(r"%[0-9a-fA-F]{2}", parsed.path + parsed.query):
+        add_link_finding(findings, "low", "url_encoding", "URL contains percent-encoded characters.")
+    if len(normalized) > 200:
+        add_link_finding(findings, "low", "long_url", "URL is unusually long.")
+    if re.search(r"(login|verify|secure|account|wallet|password|invoice|payment)", path_lower):
+        add_link_finding(findings, "low", "phishing_keyword_path", "Path contains common phishing lure keywords.")
+
+    sensitive_keys = sorted({key for key, _ in query_pairs if key.lower() in SENSITIVE_QUERY_KEYS})
+    if sensitive_keys:
+        add_link_finding(
+            findings,
+            "medium",
+            "sensitive_query_key",
+            f"Query string contains sensitive-looking keys: {', '.join(sensitive_keys)}",
+        )
+
+    metadata = {
+        "normalized": normalized,
+        "scheme": parsed.scheme,
+        "host": host_lower,
+        "registered_domain_hint": domain_hint,
+        "ascii_host": ascii_host,
+        "decoded_host": decoded_host,
+        "path": parsed.path,
+        "query_keys": [key for key, _ in query_pairs],
+    }
+    return metadata, findings
+
+
+def resolve_link_host(hostname: str) -> dict[str, object]:
+    if not hostname:
+        return {"addresses": [], "error": "No hostname found."}
+    try:
+        infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
+    except socket.gaierror as error:
+        return {"addresses": [], "error": str(error)}
+    addresses = sorted({info[4][0] for info in infos})
+    return {"addresses": addresses}
+
+
+def link_check(url: str, fetch: bool, no_dns: bool, timeout: float) -> dict[str, object]:
+    normalized = normalize_url(url)
+    metadata, findings = static_link_findings(normalized)
+    dns_result = None
+    fetch_result = None
+
+    print(f"\n[+] Ktool malicious-link checker")
+    print("[i] This is a defensive risk review. Ktool does not submit the link to third-party services.")
+    print(f"URL: {normalized}")
+    print(f"Host: {metadata['host']}")
+    if metadata["decoded_host"] != metadata["host"]:
+        print(f"Decoded host: {metadata['decoded_host']}")
+
+    if not no_dns:
+        dns_result = resolve_link_host(str(metadata["host"]))
+        addresses = dns_result.get("addresses", [])
+        if addresses:
+            print("\n[DNS]")
+            for address in addresses:
+                print(f"  {address}")
+                try:
+                    ip = ipaddress.ip_address(address)
+                    if ip.is_private or ip.is_loopback or ip.is_link_local:
+                        add_link_finding(findings, "high", "private_dns_address", f"Resolved to private/local address: {address}")
+                except ValueError:
+                    continue
+        else:
+            error = dns_result.get("error", "No DNS addresses found.")
+            print(f"\n[DNS] {error}")
+            add_link_finding(findings, "medium", "dns_resolution_failed", f"DNS resolution failed: {error}")
+
+    if fetch:
+        try:
+            redirect_data = redirect_check(normalized, timeout=timeout)
+            status, headers, _ = http_request(str(redirect_data["final_url"]), method="GET", timeout=timeout)
+            content_type = headers.get("Content-Type", "")
+            fetch_result = {
+                "redirect": redirect_data,
+                "final_status": status,
+                "final_headers": headers,
+                "content_type": content_type,
+            }
+            if redirect_data.get("chain"):
+                add_link_finding(findings, "low", "redirects", f"URL redirects {len(redirect_data['chain'])} time(s).")
+            final_host = urlparse(str(redirect_data["final_url"])).hostname or ""
+            if final_host and final_host.lower() != str(metadata["host"]).lower():
+                add_link_finding(findings, "medium", "cross_domain_redirect", f"Final host differs: {final_host}")
+            if "application/octet-stream" in content_type.lower():
+                add_link_finding(findings, "medium", "download_content_type", "Final response looks like a generic binary download.")
+        except (ConnectionError, OSError, TimeoutError) as error:
+            fetch_result = {"error": str(error)}
+            print(f"[WARN] Fetch check failed: {error}")
+            add_link_finding(findings, "low", "fetch_failed", f"HTTP fetch failed: {error}")
+
+    score = sum(int(item.get("weight", 1)) for item in findings)
+    if score >= 8 or any(item["severity"] == "critical" for item in findings):
+        verdict = "high-risk"
+    elif score >= 4:
+        verdict = "suspicious"
+    elif score >= 1:
+        verdict = "caution"
+    else:
+        verdict = "no-obvious-risk"
+
+    print(f"\nVerdict: {verdict} (score {score})")
+    if findings:
+        print("\nFindings:")
+        for item in findings:
+            print(f"[{str(item['severity']).upper()}] {item['type']}: {item['detail']}")
+    else:
+        print("[OK] No obvious malicious-link indicators found in static checks.")
+    print("\nNext step: open suspicious links only in an isolated browser/profile or sandbox, never on a production account.")
+
+    return {
+        "url": normalized,
+        "metadata": metadata,
+        "dns": dns_result,
+        "fetch": fetch_result,
+        "score": score,
+        "verdict": verdict,
+        "findings": findings,
+    }
 
 
 def cookie_audit(url: str, timeout: float) -> dict[str, object]:
@@ -5174,6 +5420,13 @@ def build_parser() -> argparse.ArgumentParser:
     cookie_parser.add_argument("url", help="URL to check.")
     cookie_parser.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout in seconds.")
 
+    link_parser = subparsers.add_parser("link-check", help="Check a URL for malicious-link indicators.")
+    link_parser.add_argument("url", help="Suspicious URL to review.")
+    link_parser.add_argument("--fetch", action="store_true", help="Fetch redirect/header metadata. Does not execute JavaScript.")
+    link_parser.add_argument("--no-dns", action="store_true", help="Skip DNS resolution.")
+    link_parser.add_argument("--timeout", type=float, default=5.0, help="DNS/HTTP timeout in seconds.")
+    link_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
     web_vuln_parser = subparsers.add_parser("web-vuln-search", help="Search for safe web vulnerability indicators.")
     add_common_run_options(web_vuln_parser)
     web_vuln_parser.add_argument("url", help="Base URL to check.")
@@ -5460,6 +5713,7 @@ def interactive_more_checks() -> object:
         ("12", "DNS Leak Check"),
         ("13", "LAN Device List"),
         ("14", "WiFi Device/User Check"),
+        ("15", "Malicious Link Check"),
     ]
     for number, label in items:
         print(f" [{number.rjust(2)}] {label}")
@@ -5509,6 +5763,10 @@ def interactive_more_checks() -> object:
             timeout=8.0,
             assume_authorized=False,
         )
+    if choice == "15":
+        url = input("Suspicious URL: ").strip()
+        fetch = input("Fetch redirect/header metadata? [y/N]: ").strip().lower() in {"y", "yes"}
+        return link_check(url, fetch=fetch, no_dns=False, timeout=5.0)
     print("Invalid choice.")
     return None
 
@@ -5770,6 +6028,8 @@ def main(argv: list[str] | None = None) -> int:
             results = dns_leak_check(include_public=args.public, endpoint=args.endpoint, timeout=args.timeout)
         elif args.command == "lan-device-list":
             results = lan_device_list(timeout=args.timeout)
+        elif args.command == "link-check":
+            results = link_check(args.url, fetch=args.fetch, no_dns=args.no_dns, timeout=args.timeout)
         elif args.command == "external-examples":
             results = print_external_tool_examples()
         else:
@@ -5965,6 +6225,7 @@ def main(argv: list[str] | None = None) -> int:
             "router-checklist",
             "dns-leak-check",
             "lan-device-list",
+            "link-check",
             "external-examples",
         }:
             pass

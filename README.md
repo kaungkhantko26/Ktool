@@ -41,6 +41,8 @@ ktool robots-check https://example.com --yes-i-am-authorized
 ktool backup-file-check https://example.com --yes-i-am-authorized
 ktool redirect-check http://example.com --yes-i-am-authorized
 ktool cookie-audit https://example.com --yes-i-am-authorized
+ktool link-check "https://example.com/login?token=test"
+ktool link-check "https://bit.ly/example" --fetch
 ktool ports 127.0.0.1 --ports 22,80,443 --yes-i-am-authorized
 ktool email-check admin@example.com --yes-i-am-authorized
 ktool email-domain example.com --dkim-selector default --yes-i-am-authorized
