@@ -19,6 +19,7 @@ import html
 import ipaddress
 import json
 import os
+import platform
 import re
 import shutil
 import socket
@@ -195,7 +196,15 @@ CHECKLISTS = {
 
 TOOL_NAME = "Ktool"
 TOOL_OWNER = "Ktool owner"
-USER_AGENT = "Ktool/2.0 (+authorized-security-testing)"
+TOOL_VERSION = "2.1.1"
+TOOL_RELEASE = "Advanced defensive workflow upgrade"
+USER_AGENT = f"Ktool/{TOOL_VERSION} (+authorized-security-testing)"
+
+VERSION_NOTES = [
+    "Version metadata and self-check support.",
+    "Expanded defensive web, WiFi, Linux, and reporting commands.",
+    "Safe-by-design boundaries for authorization, privacy, and owner data.",
+]
 
 MYANMAR_REGION_CODES = {
     "YGN": "Yangon Region",
@@ -242,6 +251,7 @@ def print_exit_screen(reason: str = "Session closed", exit_code: int = 0) -> Non
     title = "Ktool Security Console"
     lines = [
         title,
+        f"Version: {TOOL_VERSION}",
         f"Built by: {TOOL_OWNER}",
         "",
         reason,
@@ -275,7 +285,7 @@ def print_startup_banner() -> None:
 /_/ |_|\__/\____/\____/_/   
 """
     print(color(banner.rstrip(), "1;32"))
-    print(color("        Ktool built for Linux ethical security assessment", "36"))
+    print(color(f"        Ktool {TOOL_VERSION} built for Linux ethical security assessment", "36"))
     print(color(f"        Built by: {TOOL_OWNER}", "36"))
     print(color("        Authorized testing only | Defensive by design", "90"))
 
@@ -408,9 +418,11 @@ TOOL_CATEGORIES = {
     },
     "pentest": {
         "title": "Pentest Workflow",
-        "skills": ["Scope control", "Evidence management", "Finding documentation", "Report preparation"],
+        "skills": ["Scope control", "Evidence management", "Finding documentation", "Report preparation", "Tool health checks"],
         "tools": ["Ktool"],
         "implemented": [
+            "version",
+            "doctor",
             "scope",
             "evidence-init",
             "engagement-init",
@@ -4212,6 +4224,114 @@ def check_tools(categories: list[str] | None = None) -> dict[str, list[dict[str,
     return report
 
 
+def ktool_version() -> dict[str, object]:
+    payload = {
+        "name": TOOL_NAME,
+        "version": TOOL_VERSION,
+        "release": TOOL_RELEASE,
+        "owner": TOOL_OWNER,
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "user_agent": USER_AGENT,
+        "notes": VERSION_NOTES,
+    }
+
+    print(f"{TOOL_NAME} {TOOL_VERSION}")
+    print(f"Release: {TOOL_RELEASE}")
+    print(f"Built by: {TOOL_OWNER}")
+    print(f"Python: {payload['python']}")
+    print(f"Platform: {payload['platform']}")
+    print("\nHighlights:")
+    for note in VERSION_NOTES:
+        print(f"  - {note}")
+    return payload
+
+
+def ktool_doctor(timeout: float) -> dict[str, object]:
+    print("\n[+] Ktool doctor")
+    print("[i] Local setup self-check. No network target is scanned.")
+
+    checks: list[dict[str, object]] = []
+
+    def add_check(name: str, status: str, detail: str, remediation: str = "") -> None:
+        marker = {"ok": "OK", "warn": "WARN", "fail": "FAIL"}.get(status, status.upper())
+        print(f"[{marker}] {name}: {detail}")
+        if remediation:
+            print(f"      fix: {remediation}")
+        checks.append({"name": name, "status": status, "detail": detail, "remediation": remediation})
+
+    add_check(
+        "version",
+        "ok",
+        f"{TOOL_NAME} {TOOL_VERSION}",
+    )
+    python_version = sys.version_info
+    add_check(
+        "python",
+        "ok" if python_version >= (3, 10) else "warn",
+        sys.version.split()[0],
+        "Use Python 3.10+ for best compatibility." if python_version < (3, 10) else "",
+    )
+    add_check(
+        "platform",
+        "ok" if sys.platform.startswith("linux") else "warn",
+        platform.platform(),
+        "Ktool is Linux-focused; some commands are limited on macOS/Windows." if not sys.platform.startswith("linux") else "",
+    )
+    add_check(
+        "tool.py",
+        "ok" if Path(__file__).exists() else "fail",
+        str(Path(__file__).resolve()),
+    )
+
+    for command_name in ["ktool", "update-ktool.sh", "git", "python3"]:
+        path = shutil.which(command_name)
+        add_check(
+            command_name,
+            "ok" if path else "warn",
+            path or "not found in PATH",
+            f"Run ./install-commands.sh or add ~/.local/bin to PATH." if command_name in {"ktool", "update-ktool.sh"} and not path else "",
+        )
+
+    if Path(".git").exists():
+        git_status = command_output("git", ["status", "--short", "--branch"], timeout)
+        detail = str(git_status.get("stdout", "")).strip() or str(git_status.get("stderr", "")).strip() or "No git output."
+        add_check("git repository", "ok", detail.splitlines()[0] if detail else "repository detected")
+    else:
+        add_check("git repository", "warn", "current folder is not a Git repository", "Run Ktool from the cloned Ktool folder.")
+
+    key_tools = ["nmap", "whois", "dig", "curl", "nmcli", "ip", "arp-scan", "searchsploit"]
+    installed = []
+    missing = []
+    for tool in key_tools:
+        if find_tool(tool):
+            installed.append(tool)
+        else:
+            missing.append(tool)
+    add_check(
+        "common security tools",
+        "ok" if len(missing) <= 2 else "warn",
+        f"installed: {', '.join(installed) if installed else 'none'}; missing: {', '.join(missing) if missing else 'none'}",
+        "Use `ktool install-hints <tool>` or `ktool install-tools --category <category>` for setup help." if missing else "",
+    )
+
+    writable = os.access(os.getcwd(), os.W_OK)
+    add_check(
+        "workspace writable",
+        "ok" if writable else "fail",
+        os.getcwd(),
+        "Run Ktool from a folder where your user can write reports/evidence." if not writable else "",
+    )
+
+    summary = {
+        "ok": sum(1 for item in checks if item["status"] == "ok"),
+        "warn": sum(1 for item in checks if item["status"] == "warn"),
+        "fail": sum(1 for item in checks if item["status"] == "fail"),
+    }
+    print(f"\nSummary: {summary['ok']} ok, {summary['warn']} warn, {summary['fail']} fail")
+    return {"version": TOOL_VERSION, "checks": checks, "summary": summary}
+
+
 def slugify(value: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip().lower()).strip("-")
     return slug or "ktool-engagement"
@@ -4805,6 +4925,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--report", help="Write JSON report to this path.")
 
     subparsers = parser.add_subparsers(dest="command")
+
+    version_parser = subparsers.add_parser("version", help="Show Ktool version and release information.")
+    version_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    doctor_parser = subparsers.add_parser("doctor", help="Run local Ktool setup self-checks.")
+    doctor_parser.add_argument("--timeout", type=float, default=10.0, help="Command timeout in seconds.")
+    doctor_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
     roadmap_parser = subparsers.add_parser("roadmap", help="Show Ktool learning coverage.")
     roadmap_parser.add_argument(
@@ -5528,7 +5655,11 @@ def main(argv: list[str] | None = None) -> int:
             clear_screen()
             return 0
 
-        if args.command == "roadmap":
+        if args.command == "version":
+            results = ktool_version()
+        elif args.command == "doctor":
+            results = ktool_doctor(timeout=args.timeout)
+        elif args.command == "roadmap":
             results = print_roadmap(args.category)
         elif args.command == "tools":
             results = check_tools(args.category)
@@ -5797,6 +5928,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "vuln-lookup":
             results = vuln_lookup(args.query, timeout=args.timeout)
         elif args.command in {
+            "version",
+            "doctor",
             "roadmap",
             "tools",
             "install-hints",

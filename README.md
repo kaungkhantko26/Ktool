@@ -1,6 +1,6 @@
 # Ktool
 
-Ktool is a Linux-friendly ethical security assessment tool for authorized testing.
+Ktool 2.1.1 is a Linux-friendly ethical security assessment tool for authorized testing.
 
 ## Quick Start
 
@@ -25,6 +25,8 @@ Run command help:
 
 ```bash
 ktool --help
+ktool version
+ktool doctor
 ```
 
 Example authorized checks:
