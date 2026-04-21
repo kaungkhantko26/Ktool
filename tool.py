@@ -147,6 +147,14 @@ CHECKLISTS = {
         "Do not verify mailbox existence or send unsolicited messages.",
         "Document spoofing risk based on DNS controls.",
     ],
+    "vehicle": [
+        "Treat Ktool plate results as format guidance only, not an ownership lookup.",
+        "Compare the plate against the registration book/card and tax records.",
+        "Verify chassis/VIN and engine numbers physically match the documents.",
+        "Confirm seller identity and sale documents through legal channels.",
+        "Use RTAD or another official channel for owner or registration verification.",
+        "Walk away if plate, chassis, engine, or document details do not match.",
+    ],
     "report": [
         "Each finding has title, severity, affected asset, evidence, impact, remediation, and references.",
         "Evidence is reproducible and sanitized.",
@@ -159,6 +167,27 @@ CHECKLISTS = {
 TOOL_NAME = "Ktool"
 TOOL_OWNER = "Ktool owner"
 USER_AGENT = "Ktool/2.0 (+authorized-security-testing)"
+
+MYANMAR_REGION_CODES = {
+    "YGN": "Yangon Region",
+    "MDY": "Mandalay Region",
+    "NPT": "Naypyidaw Union Territory",
+    "NPW": "Naypyidaw Union Territory",
+    "SGG": "Sagaing Region",
+    "MGW": "Magway Region",
+    "BGO": "Bago Region",
+    "AYY": "Ayeyarwady Region",
+    "TNI": "Tanintharyi Region",
+    "MON": "Mon State",
+    "KYN": "Kayin State",
+    "KYH": "Kayah State",
+    "KCN": "Kachin State",
+    "KCH": "Kachin State",
+    "SHN": "Shan State",
+    "CHN": "Chin State",
+    "RKE": "Rakhine State",
+    "RKH": "Rakhine State",
+}
 
 
 def supports_color() -> bool:
@@ -248,7 +277,8 @@ def print_menu_panel() -> None:
         ("22", "Restart Console"),
         ("23", "External Tool Runner"),
         ("24", "IP Privacy Check"),
-        ("25", "Exit"),
+        ("25", "Myanmar Plate Check"),
+        ("26", "Exit"),
     ]
     width = 45
     border = "+" + "-" * width + "+"
@@ -375,6 +405,12 @@ TOOL_CATEGORIES = {
         "skills": ["iPhone WiFi reachability", "Bonjour/mDNS discovery", "Trusted USB device health inventory"],
         "tools": ["ping", "ip", "avahi-browse", "ideviceinfo", "idevice_id", "idevicepair", "usbmuxd"],
         "implemented": ["iphone-check", "iphone-usb-info", "iphone-health-guide"],
+    },
+    "vehicle": {
+        "title": "Vehicle Verification Support",
+        "skills": ["Plate format review", "Region code hints", "Legal document verification checklist"],
+        "tools": ["ktool"],
+        "implemented": ["myanmar-plate-check", "myanmar-vehicle-checklist", "checklist vehicle"],
     },
     "exploitation": {
         "title": "Exploitation Research",
@@ -3704,6 +3740,113 @@ def checklist(category: str) -> dict[str, object]:
     return {"category": category, "items": CHECKLISTS[category]}
 
 
+def normalize_myanmar_plate_text(value: str) -> str:
+    value = value.strip().upper()
+    value = re.sub(r"[\s/_]+", "-", value)
+    value = re.sub(r"-+", "-", value)
+    return value.strip("-")
+
+
+def myanmar_plate_tokens(value: str) -> list[str]:
+    return re.findall(r"[A-Z0-9]+", value.upper())
+
+
+def myanmar_plate_check(plate: str | None, region: str | None, vehicle_type: str | None) -> dict[str, object]:
+    if not plate:
+        raise ValueError("myanmar-plate-check requires a plate value.")
+
+    normalized = normalize_myanmar_plate_text(plate)
+    tokens = myanmar_plate_tokens(normalized)
+    explicit_region = normalize_myanmar_plate_text(region) if region else None
+    region_code = explicit_region or (tokens[0] if tokens and tokens[0] in MYANMAR_REGION_CODES else None)
+    body_tokens = tokens[:]
+    if region_code and body_tokens and body_tokens[0] == region_code:
+        body_tokens = body_tokens[1:]
+    body = "".join(body_tokens)
+
+    checks: list[dict[str, object]] = []
+
+    def add_check(name: str, passed: bool, detail: str) -> None:
+        checks.append({"name": name, "passed": passed, "detail": detail})
+
+    add_check("plate text present", bool(body), "Plate body after optional region extraction.")
+    add_check("letters or digits only", bool(body) and body.isalnum(), "Ktool removes spaces, slashes, and dashes before this check.")
+    add_check("contains number", any(char.isdigit() for char in body), "Vehicle plates normally include numeric registration data.")
+    add_check("reasonable length", 3 <= len(body) <= 16, "Short or very long values need manual document review.")
+
+    common_patterns = [
+        r"\d{1,3}[A-Z]{1,4}\d{1,5}",
+        r"[A-Z]{1,4}\d{1,6}",
+        r"\d{1,6}[A-Z]{1,4}",
+        r"\d{3,8}",
+    ]
+    pattern_match = any(re.fullmatch(pattern, body) for pattern in common_patterns)
+    add_check(
+        "common plate shape",
+        pattern_match,
+        "Common observed shapes only. Myanmar registrations can vary by vehicle class and issuing authority.",
+    )
+
+    region_known = region_code in MYANMAR_REGION_CODES if region_code else False
+    if region_code:
+        add_check(
+            "region code hint",
+            region_known,
+            MYANMAR_REGION_CODES.get(region_code, "Region code was not in Ktool's local guidance list."),
+        )
+
+    passed_count = sum(1 for item in checks if item["passed"])
+    status = "review-needed"
+    if body and passed_count == len(checks):
+        status = "format-plausible"
+    elif body and passed_count >= max(1, len(checks) - 1):
+        status = "format-needs-manual-check"
+
+    print("\n[+] Ktool Myanmar vehicle plate review")
+    print(f"Input: {plate}")
+    print(f"Normalized: {normalized}")
+    if vehicle_type:
+        print(f"Vehicle type note: {vehicle_type}")
+    if region_code:
+        region_label = MYANMAR_REGION_CODES.get(region_code, "unknown region code")
+        print(f"Region hint: {region_code} - {region_label}")
+    else:
+        print("Region hint: not supplied or not detected.")
+    print(f"Plate body: {body or 'not detected'}")
+    print(f"Status: {status}")
+
+    print("\nChecks:")
+    for item in checks:
+        marker = "OK" if item["passed"] else "REVIEW"
+        print(f"  [{marker}] {item['name']}: {item['detail']}")
+
+    print("\nLegal verification:")
+    for index, item in enumerate(CHECKLISTS["vehicle"], start=1):
+        print(f"  {index}. {item}")
+    print("\n[i] Ktool does not search private owner names or registration records.")
+
+    return {
+        "input": plate,
+        "normalized": normalized,
+        "region_code": region_code,
+        "region_hint": MYANMAR_REGION_CODES.get(region_code) if region_code else None,
+        "vehicle_type": vehicle_type,
+        "plate_body": body,
+        "status": status,
+        "checks": checks,
+        "owner_lookup": "not supported; use RTAD or another official legal channel",
+        "verification_checklist": CHECKLISTS["vehicle"],
+    }
+
+
+def myanmar_vehicle_checklist() -> dict[str, object]:
+    print("\n[+] Ktool Myanmar vehicle verification checklist")
+    for index, item in enumerate(CHECKLISTS["vehicle"], start=1):
+        print(f"[ ] {index}. {item}")
+    print("\n[i] Owner names and private registration data must be verified through official/legal channels.")
+    return {"category": "vehicle", "items": CHECKLISTS["vehicle"], "owner_lookup": "not supported"}
+
+
 def finding_new(
     title: str,
     severity: str,
@@ -3897,7 +4040,9 @@ def print_roadmap(category: str | None = None) -> dict[str, object]:
         for item in details["implemented"]:
             print(f"    - {item}")
 
-        if key in {"passwords", "exploitation", "awareness", "post", "wireless", "privacy", "mobile"}:
+        if key == "vehicle":
+            print("  Safety boundary: do not search private owner data; verify records through official/legal channels.")
+        elif key in {"passwords", "exploitation", "awareness", "post", "wireless", "privacy", "mobile"}:
             print("  Safety boundary: use dedicated labs and do not target real users or third-party systems.")
 
     return payload
@@ -4017,6 +4162,15 @@ def build_parser() -> argparse.ArgumentParser:
     checklist_parser = subparsers.add_parser("checklist", help="Print a pentest checklist.")
     checklist_parser.add_argument("category", choices=sorted(CHECKLISTS), help="Checklist category.")
     checklist_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    plate_parser = subparsers.add_parser("myanmar-plate-check", help="Review a Myanmar vehicle plate format and verification checklist.")
+    plate_parser.add_argument("plate", nargs="?", help="Plate text, for example 'YGN 1A-2345'.")
+    plate_parser.add_argument("--region", help="Optional region/state code, for example YGN or MDY.")
+    plate_parser.add_argument("--vehicle-type", help="Optional vehicle class note, for example car, motorcycle, taxi, or truck.")
+    plate_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    vehicle_checklist_parser = subparsers.add_parser("myanmar-vehicle-checklist", help="Show safe Myanmar vehicle verification steps.")
+    vehicle_checklist_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
     finding_parser = subparsers.add_parser("finding-new", help="Create a finding JSON template.")
     finding_parser.add_argument("--title", required=True, help="Finding title.")
@@ -4451,6 +4605,11 @@ def interactive_menu() -> None:
                 include_public = input("Query public egress IP? [y/N]: ").strip().lower() in {"y", "yes"}
                 ip_privacy_check(include_public=include_public, endpoint="https://api.ipify.org", timeout=8.0)
             elif choice == "25":
+                plate = input("Plate text: ").strip()
+                region = input("Region code [optional]: ").strip() or None
+                vehicle_type = input("Vehicle type [optional]: ").strip() or None
+                myanmar_plate_check(plate=plate, region=region, vehicle_type=vehicle_type)
+            elif choice == "26":
                 print_exit_screen("Session closed from the interactive menu.", 0)
                 break
             else:
@@ -4503,6 +4662,10 @@ def main(argv: list[str] | None = None) -> int:
             results = evidence_init(args.target, base_dir=args.base_dir)
         elif args.command == "checklist":
             results = checklist(args.category)
+        elif args.command == "myanmar-plate-check":
+            results = myanmar_plate_check(args.plate, region=args.region, vehicle_type=args.vehicle_type)
+        elif args.command == "myanmar-vehicle-checklist":
+            results = myanmar_vehicle_checklist()
         elif args.command == "finding-new":
             results = finding_new(
                 title=args.title,
@@ -4715,6 +4878,8 @@ def main(argv: list[str] | None = None) -> int:
             "scope",
             "evidence-init",
             "checklist",
+            "myanmar-plate-check",
+            "myanmar-vehicle-checklist",
             "finding-new",
             "report-init",
             "report-export",

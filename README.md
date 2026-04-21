@@ -47,6 +47,8 @@ ktool iphone-usb-info
 ktool privacy-methods
 ktool ip-privacy-check
 ktool ip-privacy-check --public
+ktool myanmar-plate-check "YGN 1A-2345"
+ktool myanmar-vehicle-checklist
 ktool setoolkit-info
 ```
 
