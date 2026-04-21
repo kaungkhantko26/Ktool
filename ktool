@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ "${KTOOL_AUTO_DEPLOY:-0}" = "1" ] && [ -x "$SCRIPT_DIR/update-ktool.sh" ]; then
+  "$SCRIPT_DIR/update-ktool.sh" "Auto deploy Ktool updates" || true
+fi
+if [ "$#" -eq 0 ]; then
+  exec python3 "$SCRIPT_DIR/tool.py" Ktool
+fi
+exec python3 "$SCRIPT_DIR/tool.py" "$@"

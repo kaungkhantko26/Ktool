@@ -16,7 +16,7 @@ if ! git remote get-url origin >/dev/null 2>&1; then
   exit 1
 fi
 
-chmod +x tool.py Ktool deploy.sh 2>/dev/null || true
+chmod +x tool.py ktool deploy.sh update-ktool.sh install-commands.sh 2>/dev/null || true
 
 if git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
   echo "[+] No Ktool changes to deploy."
@@ -24,7 +24,7 @@ if git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --other
 fi
 
 echo "[+] Staging Ktool changes..."
-git add .gitignore README.md tool.py Ktool deploy.sh
+git add .gitignore README.md tool.py ktool deploy.sh update-ktool.sh install-commands.sh
 
 echo "[+] Committing: $MESSAGE"
 git commit -m "$MESSAGE"
