@@ -57,6 +57,11 @@ ktool ncat-chat send --host 192.168.1.50 --port 4444 --message "hello from ktool
 ktool password-check
 ktool password-generate --length 24 --count 5 --no-ambiguous
 ktool admin-password --username admin --length 28 --output secrets/admin-password.env
+ktool conn-watch --show-all
+ktool conn-watch --iterations 5 --interval 3
+ktool log-watch /var/log/auth.log --alerts-only
+ktool ioc-triage 8.8.8.8 https://secure-login-account.top d41d8cd98f00b204e9800998ecf8427e
+ktool live-workflow example.com --url https://example.com --ports common --yes-i-am-authorized
 ktool permission-guide
 ktool permission-guide scapy-sniff
 ktool email-check admin@example.com --yes-i-am-authorized

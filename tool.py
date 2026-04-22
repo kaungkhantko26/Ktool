@@ -169,6 +169,26 @@ DYNAMIC_DNS_MARKERS = {
     "ddns.net",
     "serveo.net",
 }
+SUSPICIOUS_PORTS = {
+    23: "telnet cleartext admin",
+    2323: "alternate telnet",
+    4444: "common reverse shell handler",
+    5555: "common adb/reverse shell port",
+    6667: "irc/botnet control channel",
+    1337: "common backdoor port",
+    31337: "common backdoor port",
+    3389: "remote desktop exposure",
+    5900: "vnc exposure",
+}
+HIGH_RISK_LISTEN_PORTS = {21, 23, 445, 1433, 3306, 3389, 5432, 5900, 6379, 9200}
+LOG_PATTERNS = [
+    ("high", "auth failure", re.compile(r"(failed password|authentication failure|invalid user|login failed)", re.I)),
+    ("medium", "successful remote login", re.compile(r"(accepted password|accepted publickey|session opened)", re.I)),
+    ("medium", "sudo usage", re.compile(r"\bsudo\b|COMMAND=", re.I)),
+    ("high", "web attack pattern", re.compile(r"(\.\./|/etc/passwd|union select|<script|%3cscript|cmd=|powershell|/bin/sh|/bin/bash)", re.I)),
+    ("medium", "scanner signature", re.compile(r"(nmap|nikto|sqlmap|masscan|zgrab|acunetix|nessus|openvas)", re.I)),
+    ("high", "malware staging hint", re.compile(r"(curl .*\|.*sh|wget .*\|.*sh|chmod \+x|/tmp/[^ ]+\.sh)", re.I)),
+]
 
 
 def supports_color() -> bool:
@@ -280,7 +300,11 @@ def print_menu_panel() -> None:
         ("25", "Install Hints"),
         ("26", "Install Tool"),
         ("27", "Web Vulnerability Search"),
-        ("28", "Exit"),
+        ("28", "Live Connection Watch"),
+        ("29", "Log Watch"),
+        ("30", "IOC Triage"),
+        ("31", "Authorized Live Workflow"),
+        ("32", "Exit"),
     ]
     width = 54
     border = "+" + "-" * width + "+"
@@ -324,7 +348,19 @@ TOOL_CATEGORIES = {
         "title": "Network Security Testing",
         "skills": ["TCP/IP", "Ports", "Firewalls", "VPNs", "Packet capture", "LAN inventory"],
         "tools": ["wireshark", "tcpdump", "scapy", "ncat", "nc"],
-        "implemented": ["capture", "scapy-sniff", "lan-scan", "ncat-chat", "sudo-su", "permission-guide", "tools"],
+        "implemented": [
+            "capture",
+            "scapy-sniff",
+            "lan-scan",
+            "ncat-chat",
+            "conn-watch",
+            "log-watch",
+            "ioc-triage",
+            "live-workflow",
+            "sudo-su",
+            "permission-guide",
+            "tools",
+        ],
     },
     "wireless": {
         "title": "Wireless Security",
@@ -2071,6 +2107,282 @@ def packet_capture(
     }
 
 
+def is_private_address(value: str) -> bool:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return address.is_private or address.is_loopback or address.is_link_local
+
+
+def parse_lsof_connections(output: str) -> list[dict[str, object]]:
+    connections: list[dict[str, object]] = []
+    for line in output.splitlines()[1:]:
+        parts = line.split(None, 8)
+        if len(parts) < 9:
+            continue
+        command, pid, user, _, _, _, _, node, name = parts
+        local = name
+        remote = ""
+        state = ""
+        if "->" in name:
+            local, rest = name.split("->", 1)
+            remote = rest
+        state_match = re.search(r"\(([^)]+)\)", name)
+        if state_match:
+            state = state_match.group(1)
+            local = local.replace(f"({state})", "").strip()
+            remote = remote.replace(f"({state})", "").strip()
+        connections.append(
+            {
+                "command": command,
+                "pid": pid,
+                "user": user,
+                "proto": node,
+                "local": local.strip(),
+                "remote": remote.strip(),
+                "state": state,
+                "raw": name,
+            }
+        )
+    return connections
+
+
+def parse_endpoint_port(endpoint_text: str) -> int | None:
+    match = re.search(r":(\d+)(?:\s|$)", endpoint_text)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def parse_endpoint_host(endpoint_text: str) -> str | None:
+    endpoint_text = endpoint_text.strip()
+    if not endpoint_text or endpoint_text == "*":
+        return None
+    if endpoint_text.startswith("[") and "]" in endpoint_text:
+        return endpoint_text[1:endpoint_text.index("]")]
+    if ":" in endpoint_text:
+        return endpoint_text.rsplit(":", 1)[0]
+    return endpoint_text
+
+
+def connection_reasons(connection: dict[str, object]) -> list[str]:
+    reasons: list[str] = []
+    local = str(connection.get("local") or "")
+    remote = str(connection.get("remote") or "")
+    state = str(connection.get("state") or "")
+    local_port = parse_endpoint_port(local)
+    remote_port = parse_endpoint_port(remote)
+    remote_host = parse_endpoint_host(remote)
+
+    for port in (local_port, remote_port):
+        if port in SUSPICIOUS_PORTS:
+            reasons.append(SUSPICIOUS_PORTS[port])
+    if state.upper() == "LISTEN" and local_port in HIGH_RISK_LISTEN_PORTS:
+        reasons.append("high-risk service listening")
+    if state.upper() == "LISTEN" and (local.startswith("*:") or local.startswith("0.0.0.0:") or local.startswith("[::]:")):
+        reasons.append("listening on all interfaces")
+    if remote_host and not is_private_address(remote_host):
+        reasons.append("external remote endpoint")
+    return sorted(set(reasons))
+
+
+def connection_snapshot(show_all: bool) -> list[dict[str, object]]:
+    lsof_path = find_tool("lsof")
+    if not lsof_path:
+        raise ValueError("lsof is not installed. Install lsof or use platform network tools manually.")
+    result = run_external([lsof_path, "-nP", "-iTCP", "-iUDP"], timeout=15)
+    if result.returncode not in {0, 1} and result.stderr.strip():
+        raise ValueError(result.stderr.strip())
+    connections = parse_lsof_connections(result.stdout)
+    enriched: list[dict[str, object]] = []
+    for connection in connections:
+        reasons = connection_reasons(connection)
+        connection["suspicious"] = bool(reasons)
+        connection["reasons"] = reasons
+        if show_all or reasons:
+            enriched.append(connection)
+    return enriched
+
+
+def format_connection(connection: dict[str, object]) -> str:
+    suspicious = bool(connection.get("suspicious"))
+    tag = color("ALERT", "1;31") if suspicious else color("CONN ", "1;36")
+    command = f"{connection.get('command')}[{connection.get('pid')}]"
+    flow = f"{connection.get('local') or '-'}"
+    if connection.get("remote"):
+        flow += f" -> {connection.get('remote')}"
+    state = str(connection.get("state") or "-")
+    reasons = connection.get("reasons") or []
+    reason_text = ""
+    if reasons:
+        reason_text = " " + color("[" + "; ".join(str(reason) for reason in reasons) + "]", "1;31")
+    return f"{tag} {color(command.ljust(24), '36')} {state.ljust(13)} {flow}{reason_text}"
+
+
+def connection_watch(iterations: int, interval: float, show_all: bool) -> dict[str, object]:
+    if iterations < 1 or iterations > 100:
+        raise ValueError("--iterations must be between 1 and 100.")
+    if interval < 0.5 or interval > 300:
+        raise ValueError("--interval must be between 0.5 and 300 seconds.")
+
+    print_section("Live Connection Watch")
+    cyber_line("iterations", str(iterations))
+    cyber_line("interval", f"{interval}s")
+    cyber_line("display", "all connections" if show_all else "alerts only")
+
+    snapshots: list[dict[str, object]] = []
+    for index in range(iterations):
+        if iterations > 1:
+            print(color(f"\n[cycle {index + 1}/{iterations}]", "90"))
+        connections = connection_snapshot(show_all=show_all)
+        alerts = [connection for connection in connections if connection.get("suspicious")]
+        print_key_value_table([("shown", str(len(connections))), ("alerts", str(len(alerts)))])
+        for connection in connections[:80]:
+            print(format_connection(connection))
+        if len(connections) > 80:
+            print(f"[i] Showing first 80 rows out of {len(connections)}.")
+        snapshots.append({"shown": len(connections), "alerts": len(alerts), "connections": connections})
+        if index < iterations - 1:
+            time.sleep(interval)
+    return {"iterations": iterations, "interval": interval, "show_all": show_all, "snapshots": snapshots}
+
+
+def classify_log_line(line: str) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    for severity, label, pattern in LOG_PATTERNS:
+        if pattern.search(line):
+            findings.append({"severity": severity, "type": label})
+    return findings
+
+
+def read_last_lines(path: Path, limit: int) -> list[str]:
+    return path.read_text(encoding="utf-8", errors="ignore").splitlines()[-limit:]
+
+
+def print_log_event(line: str, findings: list[dict[str, str]]) -> None:
+    if not findings:
+        print(color(" INFO ", "90") + " " + line)
+        return
+    severity = "high" if any(finding["severity"] == "high" for finding in findings) else "medium"
+    tag = color("ALERT", "1;31" if severity == "high" else "1;33")
+    labels = ", ".join(finding["type"] for finding in findings)
+    print(f"{tag} {line} {color('[' + labels + ']', '1;31' if severity == 'high' else '1;33')}")
+
+
+def log_watch(path: str, lines: int, follow: bool, duration: int, alerts_only: bool) -> dict[str, object]:
+    log_path = Path(path).expanduser()
+    if not log_path.exists():
+        raise ValueError(f"Log file not found: {log_path}")
+    if lines < 1 or lines > 5000:
+        raise ValueError("--lines must be between 1 and 5000.")
+    if duration < 1 or duration > 3600:
+        raise ValueError("--duration must be between 1 and 3600 seconds.")
+
+    print_section("Log Watch")
+    cyber_line("file", str(log_path))
+    cyber_line("mode", "follow" if follow else "snapshot")
+    cyber_line("display", "alerts only" if alerts_only else "all")
+
+    events: list[dict[str, object]] = []
+    for line in read_last_lines(log_path, lines):
+        findings = classify_log_line(line)
+        if alerts_only and not findings:
+            continue
+        print_log_event(line, findings)
+        events.append({"line": line, "findings": findings})
+
+    if follow:
+        end_at = time.time() + duration
+        with log_path.open("r", encoding="utf-8", errors="ignore") as handle:
+            handle.seek(0, os.SEEK_END)
+            while time.time() < end_at:
+                line = handle.readline()
+                if not line:
+                    time.sleep(0.5)
+                    continue
+                line = line.rstrip("\n")
+                findings = classify_log_line(line)
+                if alerts_only and not findings:
+                    continue
+                print_log_event(line, findings)
+                events.append({"line": line, "findings": findings})
+    return {"file": str(log_path), "events": events, "alerts": [event for event in events if event["findings"]]}
+
+
+def classify_ioc(value: str) -> dict[str, object]:
+    raw = value.strip()
+    if not raw:
+        raise ValueError("IOC value cannot be empty.")
+    parsed_url = urlparse(raw if "://" in raw else f"//{raw}")
+    reasons: list[str] = []
+    kind = "unknown"
+    normalized = raw
+
+    try:
+        address = ipaddress.ip_address(raw)
+        kind = "ip"
+        normalized = str(address)
+        if address.is_private:
+            reasons.append("private address")
+        elif address.is_global:
+            reasons.append("public routable address")
+        if address.is_multicast or address.is_reserved:
+            reasons.append("reserved/special address")
+    except ValueError:
+        host = parsed_url.hostname
+        if re.fullmatch(r"[a-fA-F0-9]{32}", raw):
+            kind = "md5"
+        elif re.fullmatch(r"[a-fA-F0-9]{40}", raw):
+            kind = "sha1"
+        elif re.fullmatch(r"[a-fA-F0-9]{64}", raw):
+            kind = "sha256"
+        elif host:
+            kind = "url" if parsed_url.scheme else "domain"
+            normalized = host.lower()
+            reasons.extend(suspicious_reasons(normalized, raw, None, None, "IOC"))
+            if parsed_url.scheme == "http":
+                reasons.append("cleartext URL")
+        else:
+            reasons.append("unrecognized indicator format")
+
+    severity = "info"
+    if any("phishing" in reason or "watchlist" in reason or "dynamic DNS" in reason for reason in reasons):
+        severity = "medium"
+    if any("cleartext" in reason for reason in reasons):
+        severity = "medium"
+
+    return {"value": raw, "normalized": normalized, "kind": kind, "severity": severity, "reasons": sorted(set(reasons))}
+
+
+def ioc_triage(values: list[str]) -> list[dict[str, object]]:
+    if not values:
+        raise ValueError("Provide at least one IOC value.")
+    print_section("IOC Triage")
+    results = [classify_ioc(value) for value in values]
+    for result in results:
+        severity = str(result["severity"])
+        tag = color(severity.upper().rjust(6), "1;33" if severity == "medium" else "90")
+        reasons = "; ".join(str(reason) for reason in result["reasons"]) or "no local flags"
+        print(f"{tag} {str(result['kind']).ljust(8)} {result['normalized']} {color('[' + reasons + ']', '90')}")
+    return results
+
+
+def live_workflow(target: str, url: str | None, ports: str, timeout: float) -> dict[str, object]:
+    require_target = validate_host(target)
+    print_section("Authorized Live Workflow")
+    cyber_line("target", require_target)
+    results: dict[str, object] = {}
+    results["dns"] = resolve_dns(require_target)
+    results["ports"] = [asdict(item) for item in port_scanner(require_target, parse_ports(ports), timeout=timeout, workers=32, delay=0.0)]
+    if url:
+        results["web"] = web_baseline(url, timeout=5.0, delay=0.1)
+    return results
+
+
 def wireless_info() -> dict[str, object]:
     print("\n[+] Wireless interface inventory")
     print("[i] This is read-only. It does not enable monitor mode, deauthenticate clients, or capture handshakes.")
@@ -2548,6 +2860,31 @@ def build_parser() -> argparse.ArgumentParser:
     ncat_parser.add_argument("--message", help="Message for send mode. If omitted, stdin is used.")
     ncat_parser.add_argument("--timeout", type=float, help="Optional session timeout in seconds.")
 
+    conn_parser = subparsers.add_parser("conn-watch", help="Watch active local network connections and highlight risky ones.")
+    conn_parser.add_argument("--iterations", type=int, default=1, help="Number of snapshots to collect.")
+    conn_parser.add_argument("--interval", type=float, default=3.0, help="Delay between snapshots.")
+    conn_parser.add_argument("--show-all", action="store_true", help="Show all connections, not only suspicious rows.")
+    conn_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    log_parser = subparsers.add_parser("log-watch", help="Watch a log file and highlight suspicious security events.")
+    log_parser.add_argument("file", help="Log file to inspect.")
+    log_parser.add_argument("--lines", type=int, default=80, help="Initial trailing lines to inspect.")
+    log_parser.add_argument("--follow", action="store_true", help="Follow the file for new lines.")
+    log_parser.add_argument("--duration", type=int, default=60, help="Follow duration in seconds.")
+    log_parser.add_argument("--alerts-only", action="store_true", help="Only print lines with suspicious/security matches.")
+    log_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    ioc_parser = subparsers.add_parser("ioc-triage", help="Classify IPs, domains, URLs, and hashes with local heuristics.")
+    ioc_parser.add_argument("values", nargs="+", help="IOC values to inspect.")
+    ioc_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    live_parser = subparsers.add_parser("live-workflow", help="Run an authorized live DNS, port, and optional web baseline.")
+    add_common_run_options(live_parser)
+    live_parser.add_argument("target", help="Authorized host or IP target.")
+    live_parser.add_argument("--url", help="Optional URL for web baseline checks.")
+    live_parser.add_argument("--ports", default="common", help="Ports for TCP scan, for example common, 22,80,443, or 1-1024.")
+    live_parser.add_argument("--timeout", type=float, default=0.7, help="Socket timeout for port checks.")
+
     wireless_parser = subparsers.add_parser("wireless-info", help="Show read-only wireless/network interface information.")
     add_common_run_options(wireless_parser)
 
@@ -2758,6 +3095,21 @@ def interactive_menu() -> None:
                     nikto_timeout=180.0,
                 )
             elif choice == "28":
+                show_all = input("Show all connections? [y/N]: ").strip().lower() in {"y", "yes"}
+                connection_watch(iterations=1, interval=3.0, show_all=show_all)
+            elif choice == "29":
+                path = input("Log file path: ").strip()
+                alerts_only = input("Alerts only? [Y/n]: ").strip().lower() not in {"n", "no"}
+                log_watch(path, lines=80, follow=False, duration=60, alerts_only=alerts_only)
+            elif choice == "30":
+                values = shlex.split(input("IOC values: ").strip())
+                ioc_triage(values)
+            elif choice == "31":
+                target = input("Target host/IP: ").strip()
+                url = input("Optional URL [blank]: ").strip() or None
+                ports = input("Ports [common]: ").strip() or "common"
+                live_workflow(target=target, url=url, ports=ports, timeout=0.7)
+            elif choice == "32":
                 print_exit_screen("Session closed from the interactive menu.", 0)
                 break
             else:
@@ -2820,6 +3172,12 @@ def main(argv: list[str] | None = None) -> int:
             results = local_posture()
         elif args.command == "permission-guide":
             results = permission_guide(args.tool)
+        elif args.command == "conn-watch":
+            results = connection_watch(args.iterations, interval=args.interval, show_all=args.show_all)
+        elif args.command == "log-watch":
+            results = log_watch(args.file, lines=args.lines, follow=args.follow, duration=args.duration, alerts_only=args.alerts_only)
+        elif args.command == "ioc-triage":
+            results = ioc_triage(args.values)
         else:
             require_authorization(args.yes_i_am_authorized)
 
@@ -2915,6 +3273,13 @@ def main(argv: list[str] | None = None) -> int:
                 install_missing=args.install_missing,
                 package_manager=args.package_manager,
             )
+        elif args.command == "live-workflow":
+            results = live_workflow(
+                target=args.target,
+                url=args.url,
+                ports=args.ports,
+                timeout=args.timeout,
+            )
         elif args.command == "wireless-info":
             results = wireless_info()
         elif args.command == "vuln-lookup":
@@ -2932,6 +3297,9 @@ def main(argv: list[str] | None = None) -> int:
             "awareness-plan",
             "local-posture",
             "permission-guide",
+            "conn-watch",
+            "log-watch",
+            "ioc-triage",
         }:
             pass
         else:
