@@ -52,6 +52,9 @@ ktool ncat-chat listen --port 4444 --install-missing --yes-i-am-authorized
 ktool ncat-chat send --host 192.168.1.50 --port 4444 --message "hello from ktool" --yes-i-am-authorized
 ktool password-check
 ktool password-generate --length 24 --count 5 --no-ambiguous
+ktool admin-password --username admin --length 28 --output secrets/admin-password.env
+ktool permission-guide
+ktool permission-guide scapy-sniff
 ktool email-check admin@example.com --yes-i-am-authorized
 ktool email-domain example.com --dkim-selector default --yes-i-am-authorized
 ktool smtp-check mail.example.com --port 587 --starttls --yes-i-am-authorized
@@ -116,6 +119,8 @@ ktool js-audit https://example.com --tools retire,semgrep,trufflehog --output js
 
 The external wrappers run the real Linux tools when they are installed. Use `install-tools` for package-manager tools and `install-hints` for tools that need Go, Python, npm, GitHub releases, or manual setup.
 For the single-file CLI commands in `tool.py`, `--install-missing` can install supported dependencies such as `nmap`, `ncat`, `tcpdump`, `whois`, or Python `scapy` with the detected package manager.
+Ktool does not bypass operating-system permissions. If packet capture or raw socket tools return `Operation not permitted`, use `ktool permission-guide` for approved fixes such as sudo, Linux capabilities, or macOS packet-capture setup.
+Password commands use Python `secrets`; sensitive reports and admin password output files are written with mode `0600`.
 
 Use Ktool only on systems you own, lab environments, or targets where you have explicit written permission.
 

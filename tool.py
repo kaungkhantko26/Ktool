@@ -24,6 +24,7 @@ import secrets
 import shutil
 import socket
 import ssl
+import stat
 import string
 import subprocess
 import sys
@@ -145,6 +146,8 @@ PYTHON_PACKAGES = {
     "scapy": "scapy",
 }
 
+SENSITIVE_REPORT_COMMANDS = {"admin-password", "password-generate"}
+
 
 def supports_color() -> bool:
     return sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
@@ -243,16 +246,18 @@ def print_menu_panel() -> None:
         ("13", "Password Strength Check"),
         ("14", "Password Generator"),
         ("15", "ncat Port Messenger"),
-        ("16", "Password Policy Audit"),
-        ("17", "Packet Capture Sample"),
-        ("18", "Wireless Interface Info"),
-        ("19", "Vulnerability Lookup"),
-        ("20", "Awareness Plan"),
-        ("21", "Local Posture Review"),
-        ("22", "Install Hints"),
-        ("23", "Install Tool"),
-        ("24", "Web Vulnerability Search"),
-        ("25", "Exit"),
+        ("16", "Admin Password Generator"),
+        ("17", "Permission Guide"),
+        ("18", "Password Policy Audit"),
+        ("19", "Packet Capture Sample"),
+        ("20", "Wireless Interface Info"),
+        ("21", "Vulnerability Lookup"),
+        ("22", "Awareness Plan"),
+        ("23", "Local Posture Review"),
+        ("24", "Install Hints"),
+        ("25", "Install Tool"),
+        ("26", "Web Vulnerability Search"),
+        ("27", "Exit"),
     ]
     width = 54
     border = "+" + "-" * width + "+"
@@ -290,13 +295,13 @@ TOOL_CATEGORIES = {
         "title": "Password Security Testing",
         "skills": ["Password audit policy", "Weak password review", "Strong password generation"],
         "tools": ["john", "hashcat"],
-        "implemented": ["password-audit", "password-check", "password-generate"],
+        "implemented": ["password-audit", "password-check", "password-generate", "admin-password"],
     },
     "network": {
         "title": "Network Security Testing",
         "skills": ["TCP/IP", "Ports", "Firewalls", "VPNs", "Packet capture", "LAN inventory"],
         "tools": ["wireshark", "tcpdump", "scapy", "ncat", "nc"],
-        "implemented": ["capture", "scapy-sniff", "lan-scan", "ncat-chat", "tools"],
+        "implemented": ["capture", "scapy-sniff", "lan-scan", "ncat-chat", "permission-guide", "tools"],
     },
     "wireless": {
         "title": "Wireless Security",
@@ -1122,6 +1127,7 @@ def nmap_scan(
         print(result.stdout.strip())
     if result.stderr.strip():
         print(result.stderr.strip(), file=sys.stderr)
+        print_permission_hint_if_needed(result.stderr, "tcpdump packet capture")
 
     return {
         "target": target,
@@ -1298,12 +1304,12 @@ def password_strength(password: str, show_value: bool = False) -> dict[str, obje
     return result
 
 
-def generate_password(
+def generate_password_values(
     length: int,
     count: int,
     no_symbols: bool,
     no_ambiguous: bool,
-) -> dict[str, object]:
+) -> list[str]:
     if length < 8 or length > 256:
         raise ValueError("--length must be between 8 and 256.")
     if count < 1 or count > 50:
@@ -1334,6 +1340,21 @@ def generate_password(
         chars = required + remaining
         secrets.SystemRandom().shuffle(chars)
         generated.append("".join(chars))
+    return generated
+
+
+def generate_password(
+    length: int,
+    count: int,
+    no_symbols: bool,
+    no_ambiguous: bool,
+) -> dict[str, object]:
+    generated = generate_password_values(
+        length=length,
+        count=count,
+        no_symbols=no_symbols,
+        no_ambiguous=no_ambiguous,
+    )
 
     print_section("Password Generator")
     for value in generated:
@@ -1345,6 +1366,128 @@ def generate_password(
         "ambiguous_removed": no_ambiguous,
         "passwords": generated,
     }
+
+
+def write_secret_file(path: str, content: str) -> str:
+    output_path = Path(path).expanduser()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = os.open(output_path, flags, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(content)
+    output_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    return str(output_path)
+
+
+def admin_password(
+    username: str,
+    length: int,
+    rotate_after_days: int,
+    output: str | None,
+    no_symbols: bool,
+    no_ambiguous: bool,
+) -> dict[str, object]:
+    username = username.strip() or "admin"
+    if rotate_after_days < 1 or rotate_after_days > 365:
+        raise ValueError("--rotate-after-days must be between 1 and 365.")
+
+    generated = generate_password_values(
+        length=length,
+        count=1,
+        no_symbols=no_symbols,
+        no_ambiguous=no_ambiguous,
+    )[0]
+
+    result: dict[str, object] = {
+        "username": username,
+        "password": generated,
+        "length": length,
+        "rotate_after_days": rotate_after_days,
+        "storage": "not_saved",
+        "notes": [
+            "Store this in an approved password manager.",
+            "Use a unique password per admin account.",
+            "Enable MFA for admin access where supported.",
+        ],
+    }
+
+    print_section("Admin Password")
+    cyber_line("username", username)
+    cyber_line("password", generated)
+    cyber_line("rotation", f"{rotate_after_days} days")
+    print("[i] Store this in your approved password manager. Do not reuse it.")
+
+    if output:
+        body = (
+            f"username={username}\n"
+            f"password={generated}\n"
+            f"rotate_after_days={rotate_after_days}\n"
+            f"generated_at={datetime.now(timezone.utc).isoformat()}\n"
+        )
+        saved_path = write_secret_file(output, body)
+        result["storage"] = saved_path
+        print(f"[+] Saved secret file with mode 0600: {saved_path}")
+
+    return result
+
+
+def permission_guide(tool: str | None = None) -> dict[str, object]:
+    selected = tool or "all"
+    guides: dict[str, list[str]] = {
+        "capture": [
+            "Run packet capture from an approved admin shell: sudo ktool capture <interface> --yes-i-am-authorized",
+            "Linux alternative for tcpdump: sudo setcap cap_net_raw,cap_net_admin=eip $(command -v tcpdump)",
+            "macOS alternative: install Wireshark's ChmodBPF package or run from an approved sudo session.",
+        ],
+        "scapy-sniff": [
+            "Run Scapy sniffing from an approved admin shell: sudo ktool scapy-sniff --interface <iface> --yes-i-am-authorized",
+            "Linux raw socket access generally requires root or CAP_NET_RAW/CAP_NET_ADMIN.",
+            "macOS raw packet access often requires sudo and Terminal/iTerm network permissions.",
+        ],
+        "lan-scan": [
+            "Use --no-scapy for an unprivileged ping sweep when ARP scan permissions are unavailable.",
+            "For Scapy ARP discovery, run from an approved admin shell or use an authorized network scanner host.",
+        ],
+        "nmap": [
+            "Most connect scans run unprivileged; OS detection and SYN scans usually require sudo.",
+            "Use ktool nmap <target> without --os-detect if admin rights are not approved.",
+        ],
+        "ncat-chat": [
+            "Use ports above 1024 for unprivileged listen mode.",
+            "Ports below 1024 require approved admin privileges or a service manager binding the port.",
+        ],
+    }
+    if selected != "all" and selected not in guides:
+        raise ValueError(f"Unknown permission guide: {selected}. Choices: {', '.join(sorted(guides))}, all")
+
+    shown = guides if selected == "all" else {selected: guides[selected]}
+    print_section("Permission Guide")
+    print("[i] Ktool will not bypass operating-system controls. Use approved admin privileges or capabilities.")
+    for name, lines in shown.items():
+        print(f"\n[{name}]")
+        for line in lines:
+            print(f"  - {line}")
+    return {"tool": selected, "guides": shown}
+
+
+def permission_error_message(operation: str, error: object | str) -> str:
+    return (
+        f"{operation} needs approved OS privileges: {error}\n"
+        "Ktool will not bypass permission controls. Run `ktool permission-guide` "
+        "for safe work-environment fixes."
+    )
+
+
+def print_permission_hint_if_needed(stderr: str, operation: str) -> None:
+    lowered = stderr.lower()
+    markers = (
+        "operation not permitted",
+        "permission denied",
+        "you don't have permission",
+        "socket: operation not permitted",
+    )
+    if any(marker in lowered for marker in markers):
+        print(f"\n[i] {permission_error_message(operation, stderr.strip())}", file=sys.stderr)
 
 
 def resolve_name(address: str) -> str | None:
@@ -1421,7 +1564,7 @@ def lan_scan(
         try:
             devices = scapy_arp_scan(network, interface, timeout, install_missing)
         except PermissionError as error:
-            print(f"[i] Scapy ARP needs elevated privileges: {error}")
+            print(f"[i] {permission_error_message('Scapy ARP scan', error)}")
         except OSError as error:
             print(f"[i] Scapy ARP failed, falling back to ping sweep: {error}")
 
@@ -1497,8 +1640,11 @@ def scapy_sniff(
             store=bool(output),
         )
     except PermissionError as error:
-        raise ValueError(f"Packet sniffing needs elevated privileges: {error}") from error
+        raise ValueError(permission_error_message("Scapy packet sniffing", error)) from error
     except OSError as error:
+        message = str(error)
+        if "operation not permitted" in message.lower() or "permission denied" in message.lower():
+            raise ValueError(permission_error_message("Scapy packet sniffing", error)) from error
         raise ValueError(f"Scapy sniff failed: {error}") from error
 
     if output:
@@ -1571,6 +1717,7 @@ def ncat_chat(
             print(result.stdout.strip())
         if result.stderr.strip():
             print(result.stderr.strip(), file=sys.stderr)
+            print_permission_hint_if_needed(result.stderr, "ncat messaging")
         return {
             "mode": mode,
             "command": command,
@@ -1581,6 +1728,8 @@ def ncat_chat(
 
     try:
         result = subprocess.run(command, check=False, timeout=timeout)
+        if result.returncode != 0:
+            print_permission_hint_if_needed("", "ncat messaging")
         return {"mode": mode, "command": command, "returncode": result.returncode}
     except subprocess.TimeoutExpired:
         print(f"[i] ncat session timed out after {timeout}s.")
@@ -1896,8 +2045,13 @@ def save_report(path: str | None, command: str, data: Iterable[object] | object)
         "data": payload_data,
     }
     report_path = Path(path)
-    report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    print(f"\n[+] Report saved to {report_path}")
+    report_content = json.dumps(payload, indent=2)
+    if command in SENSITIVE_REPORT_COMMANDS:
+        saved_path = write_secret_file(str(report_path), report_content + "\n")
+        print(f"\n[+] Sensitive report saved with mode 0600 to {saved_path}")
+    else:
+        report_path.write_text(report_content, encoding="utf-8")
+        print(f"\n[+] Report saved to {report_path}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2062,6 +2216,16 @@ def build_parser() -> argparse.ArgumentParser:
     password_gen_parser.add_argument("--no-ambiguous", action="store_true", help="Remove visually ambiguous characters.")
     password_gen_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
+    admin_password_parser = subparsers.add_parser("admin-password", help="Generate a secure randomized admin password.")
+    admin_password_parser.add_argument("--username", default="admin", help="Admin username label.")
+    admin_password_parser.add_argument("--length", type=int, default=28, help="Password length.")
+    admin_password_parser.add_argument("--rotate-after-days", type=int, default=90, help="Recommended rotation interval.")
+    admin_password_parser.add_argument("--output", help="Optional local secret file saved with mode 0600.")
+    admin_password_parser.add_argument("--no-symbols", action="store_true", help="Exclude symbols.")
+    admin_password_parser.add_argument("--no-ambiguous", action="store_true", default=True, help="Remove visually ambiguous characters.")
+    admin_password_parser.add_argument("--allow-ambiguous", action="store_false", dest="no_ambiguous", help="Allow visually ambiguous characters.")
+    admin_password_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
     capture_parser = subparsers.add_parser("capture", help="Capture packets with tcpdump for a short defensive sample.")
     add_common_run_options(capture_parser)
     add_install_options(capture_parser)
@@ -2104,6 +2268,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     posture_parser = subparsers.add_parser("local-posture", help="Run local defensive privilege-risk checks.")
     posture_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    permission_parser = subparsers.add_parser("permission-guide", help="Show safe fixes for Operation not permitted errors.")
+    permission_parser.add_argument(
+        "tool",
+        nargs="?",
+        choices=["capture", "scapy-sniff", "lan-scan", "nmap", "ncat-chat", "all"],
+        default="all",
+        help="Tool to show guidance for.",
+    )
+    permission_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
     return parser
 
@@ -2223,6 +2397,21 @@ def interactive_menu() -> None:
                     package_manager=None,
                 )
             elif choice == "16":
+                username = input("Admin username [admin]: ").strip() or "admin"
+                length = int(input("Length [28]: ").strip() or "28")
+                output = input("Save to 0600 file [optional]: ").strip() or None
+                admin_password(
+                    username=username,
+                    length=length,
+                    rotate_after_days=90,
+                    output=output,
+                    no_symbols=False,
+                    no_ambiguous=True,
+                )
+            elif choice == "17":
+                tool = input("Tool (all/capture/scapy-sniff/lan-scan/nmap/ncat-chat) [all]: ").strip() or "all"
+                permission_guide(tool)
+            elif choice == "18":
                 path = input("Password candidate file: ").strip()
                 password_audit(
                     path,
@@ -2233,29 +2422,29 @@ def interactive_menu() -> None:
                     require_symbol=True,
                     show_values=False,
                 )
-            elif choice == "17":
+            elif choice == "19":
                 interface = input("Interface (eth0/wlan0): ").strip()
                 output = input("Output pcap [capture.pcap]: ").strip() or "capture.pcap"
                 packet_capture(interface, duration=20, count=100, output=output)
-            elif choice == "18":
+            elif choice == "20":
                 wireless_info()
-            elif choice == "19":
+            elif choice == "21":
                 query = input("Searchsploit query (product/CVE/service): ").strip()
                 vuln_lookup(query, timeout=30.0)
-            elif choice == "20":
+            elif choice == "22":
                 company = input("Company name [the organization]: ").strip() or "the organization"
                 audience = input("Audience [employees]: ").strip() or "employees"
                 awareness_plan(company, audience)
-            elif choice == "21":
+            elif choice == "23":
                 local_posture()
-            elif choice == "22":
+            elif choice == "24":
                 tool = input("Tool name [all]: ").strip() or None
                 print_install_hints(tool)
-            elif choice == "23":
+            elif choice == "25":
                 tool = input(f"Tool ({', '.join(sorted(PACKAGE_NAMES))}): ").strip()
                 execute = input("Run installer now? [y/N]: ").strip().lower() in {"y", "yes"}
                 install_system_tool(tool, manager=None, execute=execute)
-            elif choice == "24":
+            elif choice == "26":
                 url = input("Base URL (https://example.com): ").strip()
                 use_nikto = input("Run Nikto if installed? [y/N]: ").strip().lower() in {"y", "yes"}
                 web_vulnerability_search(
@@ -2266,7 +2455,7 @@ def interactive_menu() -> None:
                     use_nikto=use_nikto,
                     nikto_timeout=180.0,
                 )
-            elif choice == "25":
+            elif choice == "27":
                 print_exit_screen("Session closed from the interactive menu.", 0)
                 break
             else:
@@ -2312,10 +2501,21 @@ def main(argv: list[str] | None = None) -> int:
                 no_symbols=args.no_symbols,
                 no_ambiguous=args.no_ambiguous,
             )
+        elif args.command == "admin-password":
+            results = admin_password(
+                username=args.username,
+                length=args.length,
+                rotate_after_days=args.rotate_after_days,
+                output=args.output,
+                no_symbols=args.no_symbols,
+                no_ambiguous=args.no_ambiguous,
+            )
         elif args.command == "awareness-plan":
             results = awareness_plan(args.company, args.audience)
         elif args.command == "local-posture":
             results = local_posture()
+        elif args.command == "permission-guide":
+            results = permission_guide(args.tool)
         else:
             require_authorization(args.yes_i_am_authorized)
 
@@ -2421,8 +2621,10 @@ def main(argv: list[str] | None = None) -> int:
             "password-audit",
             "password-check",
             "password-generate",
+            "admin-password",
             "awareness-plan",
             "local-posture",
+            "permission-guide",
         }:
             pass
         else:
