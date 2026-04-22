@@ -29,22 +29,24 @@ ktool version
 ktool doctor
 ```
 
-Enable automatic GitHub deploys on macOS:
+Enable automatic GitHub deploys after normal `ktool` runs:
 
 ```bash
 ./ktool-auto-deploy.sh install
 ```
 
-This enables auto-deploy after normal `ktool` runs from your Terminal and also installs a macOS LaunchAgent that checks every 300 seconds. If macOS blocks the background agent from accessing a repo under `Desktop`, the after-`ktool` deploy still works because it runs from your Terminal session. To change the LaunchAgent interval:
+This runs from your Terminal session, so it works even when macOS blocks background agents from accessing a repo under `Desktop`. For background scheduling on macOS, use:
 
 ```bash
-./ktool-auto-deploy.sh install 120
+./ktool-auto-deploy.sh schedule
+./ktool-auto-deploy.sh schedule 120
 ```
 
 Manage it:
 
 ```bash
 ./ktool-auto-deploy.sh status
+./ktool-auto-deploy.sh unschedule
 ./ktool-auto-deploy.sh uninstall
 ```
 
@@ -194,4 +196,4 @@ export KTOOL_HOME="$HOME/Ktool"
 ```
 
 By default, starting `ktool` does not run Git commands. Use `update-ktool.sh` when you want to pull updates, and `./deploy.sh` only when you want to commit and push local changes.
-If auto-deploy is enabled, `ktool-auto-deploy.sh` runs `./deploy.sh` after normal `ktool` runs and in the background at the configured interval when macOS allows it.
+If auto-deploy is enabled, `ktool-auto-deploy.sh` runs `./deploy.sh` after normal `ktool` runs. Background scheduling is optional.

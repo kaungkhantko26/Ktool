@@ -26,13 +26,15 @@ LOCK_DIR="${TMPDIR:-/tmp}/ktool-auto-deploy.lock"
 usage() {
   cat <<EOF
 Usage:
-  ktool-auto-deploy.sh install [interval_seconds]
+  ktool-auto-deploy.sh install
+  ktool-auto-deploy.sh schedule [interval_seconds]
+  ktool-auto-deploy.sh unschedule
   ktool-auto-deploy.sh uninstall
   ktool-auto-deploy.sh status
   ktool-auto-deploy.sh run
 
-The install command enables auto-deploy after normal ktool runs and creates a
-macOS LaunchAgent that also tries to deploy in the background.
+The install command enables auto-deploy after normal ktool runs.
+The schedule command also creates a macOS LaunchAgent for background deploys.
 EOF
 }
 
@@ -74,11 +76,13 @@ write_plist() {
 EOF
 }
 
-install_agent() {
+enable_after_ktool() {
   touch "$SCRIPT_DIR/.ktool-auto-deploy"
+  echo "[+] Ktool auto-deploy enabled after normal ktool runs."
+}
 
+schedule_agent() {
   if [ "$(uname -s)" != "Darwin" ]; then
-    echo "[+] Ktool auto-deploy enabled after normal ktool runs."
     echo "[i] Background scheduling currently supports macOS launchd only."
     exit 0
   fi
@@ -88,16 +92,20 @@ install_agent() {
   launchctl bootout "gui/$(id -u)" "$PLIST_PATH" >/dev/null 2>&1 || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH"
   launchctl enable "gui/$(id -u)/${LABEL}" >/dev/null 2>&1 || true
-  echo "[+] Ktool auto-deploy enabled after normal ktool runs."
   echo "[+] Ktool auto-deploy enabled every ${interval}s."
   echo "[i] Logs: ${LOG_DIR}/auto-deploy.log and ${LOG_DIR}/auto-deploy.err"
 }
 
-uninstall_agent() {
+unschedule_agent() {
   if [ "$(uname -s)" = "Darwin" ]; then
     launchctl bootout "gui/$(id -u)" "$PLIST_PATH" >/dev/null 2>&1 || true
   fi
   rm -f "$PLIST_PATH"
+  echo "[+] Ktool background auto-deploy disabled."
+}
+
+uninstall_agent() {
+  unschedule_agent
   rm -f "$SCRIPT_DIR/.ktool-auto-deploy"
   echo "[+] Ktool auto-deploy disabled."
 }
@@ -148,7 +156,9 @@ run_once() {
 }
 
 case "${1:-}" in
-  install) shift; install_agent "${1:-$DEFAULT_INTERVAL}" ;;
+  install) enable_after_ktool ;;
+  schedule) shift; schedule_agent "${1:-$DEFAULT_INTERVAL}" ;;
+  unschedule) unschedule_agent ;;
   uninstall) uninstall_agent ;;
   status) status_agent ;;
   run) run_once ;;
