@@ -21,6 +21,7 @@ import os
 import platform
 import re
 import secrets
+import shlex
 import shutil
 import socket
 import ssl
@@ -147,6 +148,27 @@ PYTHON_PACKAGES = {
 }
 
 SENSITIVE_REPORT_COMMANDS = {"admin-password", "password-generate"}
+HTTP_PORTS = {80, 8000, 8080, 8081, 8888}
+SUSPICIOUS_DNS_TLDS = {".zip", ".mov", ".top", ".xyz", ".click", ".country", ".gq", ".tk"}
+SUSPICIOUS_DOMAIN_MARKERS = {
+    "login",
+    "verify",
+    "update",
+    "secure",
+    "account",
+    "wallet",
+    "free",
+    "bonus",
+    "auth",
+}
+DYNAMIC_DNS_MARKERS = {
+    "duckdns.org",
+    "no-ip.",
+    "dyndns.",
+    "hopto.org",
+    "ddns.net",
+    "serveo.net",
+}
 
 
 def supports_color() -> bool:
@@ -247,17 +269,18 @@ def print_menu_panel() -> None:
         ("14", "Password Generator"),
         ("15", "ncat Port Messenger"),
         ("16", "Admin Password Generator"),
-        ("17", "Permission Guide"),
-        ("18", "Password Policy Audit"),
-        ("19", "Packet Capture Sample"),
-        ("20", "Wireless Interface Info"),
-        ("21", "Vulnerability Lookup"),
-        ("22", "Awareness Plan"),
-        ("23", "Local Posture Review"),
-        ("24", "Install Hints"),
-        ("25", "Install Tool"),
-        ("26", "Web Vulnerability Search"),
-        ("27", "Exit"),
+        ("17", "Run Ktool as Root"),
+        ("18", "Permission Guide"),
+        ("19", "Password Policy Audit"),
+        ("20", "Packet Capture Sample"),
+        ("21", "Wireless Interface Info"),
+        ("22", "Vulnerability Lookup"),
+        ("23", "Awareness Plan"),
+        ("24", "Local Posture Review"),
+        ("25", "Install Hints"),
+        ("26", "Install Tool"),
+        ("27", "Web Vulnerability Search"),
+        ("28", "Exit"),
     ]
     width = 54
     border = "+" + "-" * width + "+"
@@ -301,7 +324,7 @@ TOOL_CATEGORIES = {
         "title": "Network Security Testing",
         "skills": ["TCP/IP", "Ports", "Firewalls", "VPNs", "Packet capture", "LAN inventory"],
         "tools": ["wireshark", "tcpdump", "scapy", "ncat", "nc"],
-        "implemented": ["capture", "scapy-sniff", "lan-scan", "ncat-chat", "permission-guide", "tools"],
+        "implemented": ["capture", "scapy-sniff", "lan-scan", "ncat-chat", "sudo-su", "permission-guide", "tools"],
     },
     "wireless": {
         "title": "Wireless Security",
@@ -1434,13 +1457,20 @@ def admin_password(
 def permission_guide(tool: str | None = None) -> dict[str, object]:
     selected = tool or "all"
     guides: dict[str, list[str]] = {
+        "sudo-su": [
+            "Use ktool sudo-su -- <command args> to relaunch one Ktool command through sudo.",
+            "Use ktool sudo-su with no command args to open the interactive menu as root.",
+            "This uses the operating system's sudo policy; it does not bypass authentication or permissions.",
+        ],
         "capture": [
             "Run packet capture from an approved admin shell: sudo ktool capture <interface> --yes-i-am-authorized",
+            "Or use: ktool sudo-su -- capture <interface> --yes-i-am-authorized",
             "Linux alternative for tcpdump: sudo setcap cap_net_raw,cap_net_admin=eip $(command -v tcpdump)",
             "macOS alternative: install Wireshark's ChmodBPF package or run from an approved sudo session.",
         ],
         "scapy-sniff": [
             "Run Scapy sniffing from an approved admin shell: sudo ktool scapy-sniff --interface <iface> --yes-i-am-authorized",
+            "Or use: ktool sudo-su -- scapy-sniff --interface <iface> --yes-i-am-authorized",
             "Linux raw socket access generally requires root or CAP_NET_RAW/CAP_NET_ADMIN.",
             "macOS raw packet access often requires sudo and Terminal/iTerm network permissions.",
         ],
@@ -1488,6 +1518,56 @@ def print_permission_hint_if_needed(stderr: str, operation: str) -> None:
     )
     if any(marker in lowered for marker in markers):
         print(f"\n[i] {permission_error_message(operation, stderr.strip())}", file=sys.stderr)
+
+
+def is_root_user() -> bool:
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+def sudo_su(ktool_args: list[str], dry_run: bool = False) -> dict[str, object]:
+    if os.name == "nt":
+        raise ValueError("sudo-su is only supported on Unix-like systems.")
+
+    args = list(ktool_args)
+    if args and args[0] == "--":
+        args = args[1:]
+
+    script_path = str(Path(__file__).resolve())
+    target = args or ["<interactive-menu>"]
+
+    if is_root_user():
+        print_section("Root Access")
+        cyber_line("status", "already running as root")
+        cyber_line("target", " ".join(target))
+        if dry_run or not args:
+            return {"already_root": True, "target": target, "executed": False}
+        command = [sys.executable, script_path, *args]
+    else:
+        sudo_path = find_tool("sudo")
+        if not sudo_path:
+            raise ValueError("sudo is not installed or not in PATH. Ask your administrator to provision sudo access.")
+        command = [sudo_path, sys.executable, script_path, *args]
+
+    print_section("Root Relaunch")
+    cyber_line("command", " ".join(shlex.quote(part) for part in command))
+    print("[i] This uses approved sudo policy. Ktool does not bypass authentication or OS permissions.")
+
+    if dry_run:
+        return {
+            "command": command,
+            "target": target,
+            "already_root": is_root_user(),
+            "executed": False,
+        }
+
+    result = subprocess.run(command, check=False)
+    return {
+        "command": command,
+        "target": target,
+        "already_root": is_root_user(),
+        "executed": True,
+        "returncode": result.returncode,
+    }
 
 
 def resolve_name(address: str) -> str | None:
@@ -1596,6 +1676,171 @@ def lan_scan(
     return devices
 
 
+def combine_bpf_filters(traffic: str, bpf_filter: str | None) -> str | None:
+    traffic_filters = {
+        "all": None,
+        "http": "tcp port 80 or tcp port 8000 or tcp port 8080 or tcp port 8081 or tcp port 8888",
+        "dns": "port 53",
+        "http-dns": "(port 53) or (tcp port 80 or tcp port 8000 or tcp port 8080 or tcp port 8081 or tcp port 8888)",
+    }
+    selected = traffic_filters[traffic]
+    if selected and bpf_filter:
+        return f"({selected}) and ({bpf_filter})"
+    return selected or bpf_filter
+
+
+def decode_packet_text(raw: bytes) -> str:
+    return raw.decode("utf-8", errors="ignore").replace("\r", "")
+
+
+def header_value(http_text: str, header_name: str) -> str | None:
+    prefix = f"{header_name.lower()}:"
+    for line in http_text.splitlines()[1:30]:
+        if line.lower().startswith(prefix):
+            return line.split(":", 1)[1].strip()
+    return None
+
+
+def normalize_domain(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="ignore")
+    else:
+        text = str(value)
+    text = text.strip().strip(".").lower()
+    return text or None
+
+
+def endpoint(packet: object, layer_name: str, attr: str) -> str:
+    try:
+        layer = packet.getlayer(layer_name)
+        return str(getattr(layer, attr))
+    except Exception:
+        return "?"
+
+
+def packet_ports(packet: object) -> tuple[int | None, int | None, str]:
+    for layer_name, proto in (("TCP", "TCP"), ("UDP", "UDP")):
+        try:
+            if packet.haslayer(layer_name):
+                layer = packet.getlayer(layer_name)
+                return int(layer.sport), int(layer.dport), proto
+        except Exception:
+            continue
+    return None, None, "IP"
+
+
+def suspicious_reasons(domain: str | None, info: str, sport: int | None, dport: int | None, proto: str) -> list[str]:
+    reasons: list[str] = []
+    lowered_info = info.lower()
+    if domain:
+        lowered_domain = domain.lower()
+        if len(lowered_domain) > 60 or lowered_domain.count(".") >= 5:
+            reasons.append("long/suspicious domain")
+        if lowered_domain.startswith("xn--") or ".xn--" in lowered_domain:
+            reasons.append("punycode domain")
+        if any(lowered_domain.endswith(tld) for tld in SUSPICIOUS_DNS_TLDS):
+            reasons.append("watchlist TLD")
+        if any(marker in lowered_domain for marker in DYNAMIC_DNS_MARKERS):
+            reasons.append("dynamic DNS domain")
+        marker_hits = [marker for marker in SUSPICIOUS_DOMAIN_MARKERS if marker in lowered_domain]
+        if len(marker_hits) >= 2:
+            reasons.append("phishing-like domain words")
+    if proto == "HTTP" and any(token in lowered_info for token in ("password=", "passwd=", "token=", "apikey=", "api_key=")):
+        reasons.append("sensitive value in cleartext HTTP")
+    if proto == "HTTP" and any(token in lowered_info for token in ("login", "signin", "auth")):
+        reasons.append("login over cleartext HTTP")
+    if dport in {21, 23, 2323} or sport in {21, 23, 2323}:
+        reasons.append("cleartext admin protocol")
+    if dport in {445, 3389, 5900}:
+        reasons.append("sensitive management/service port")
+    return reasons
+
+
+def analyze_packet(packet: object) -> dict[str, object]:
+    src = endpoint(packet, "IP", "src")
+    dst = endpoint(packet, "IP", "dst")
+    if src == "?" and dst == "?":
+        src = endpoint(packet, "IPv6", "src")
+        dst = endpoint(packet, "IPv6", "dst")
+
+    sport, dport, transport = packet_ports(packet)
+    proto = transport
+    domain: str | None = None
+    info = ""
+
+    try:
+        if packet.haslayer("DNSQR"):
+            proto = "DNS"
+            query = packet.getlayer("DNSQR")
+            domain = normalize_domain(getattr(query, "qname", None))
+            qtype = getattr(query, "qtype", "?")
+            info = f"query type={qtype}"
+    except Exception:
+        pass
+
+    try:
+        if packet.haslayer("Raw") and (sport in HTTP_PORTS or dport in HTTP_PORTS):
+            raw = bytes(packet.getlayer("Raw").load)
+            text = decode_packet_text(raw)
+            first_line = text.splitlines()[0].strip() if text.splitlines() else ""
+            host = header_value(text, "Host")
+            if first_line.startswith(("GET ", "POST ", "PUT ", "DELETE ", "HEAD ", "OPTIONS ", "PATCH ")):
+                proto = "HTTP"
+                domain = normalize_domain(host) or domain
+                info = first_line[:120]
+    except Exception:
+        pass
+
+    if not info:
+        try:
+            info = packet.summary()
+        except Exception:
+            info = "packet"
+
+    reasons = suspicious_reasons(domain, info, sport, dport, proto)
+    return {
+        "time": datetime.now().strftime("%H:%M:%S"),
+        "src": src,
+        "dst": dst,
+        "sport": sport,
+        "dport": dport,
+        "proto": proto,
+        "domain": domain,
+        "info": info,
+        "suspicious": bool(reasons),
+        "reasons": reasons,
+    }
+
+
+def format_packet_event(event: dict[str, object]) -> str:
+    proto = str(event["proto"])
+    suspicious = bool(event["suspicious"])
+    tag = "ALERT" if suspicious else proto
+    tag_color = "1;31" if suspicious else ("1;35" if proto == "DNS" else "1;36" if proto == "HTTP" else "90")
+    src = str(event["src"])
+    dst = str(event["dst"])
+    sport = event.get("sport")
+    dport = event.get("dport")
+    left = f"{src}{':' + str(sport) if sport else ''}"
+    right = f"{dst}{':' + str(dport) if dport else ''}"
+    domain = str(event["domain"] or "-")
+    info = str(event["info"])
+    if len(info) > 110:
+        info = info[:107] + "..."
+    reason_text = ""
+    if suspicious:
+        reason_text = " " + color("[" + "; ".join(str(reason) for reason in event["reasons"]) + "]", "1;31")
+    return (
+        f"{color(str(event['time']), '90')} "
+        f"{color(tag.rjust(5), tag_color)} "
+        f"{left} {color('->', '32')} {right} "
+        f"{color(domain, '1;33' if domain != '-' else '90')} "
+        f"{info}{reason_text}"
+    )
+
+
 def scapy_sniff(
     interface: str | None,
     duration: int,
@@ -1603,6 +1848,8 @@ def scapy_sniff(
     bpf_filter: str | None,
     output: str | None,
     install_missing: bool,
+    traffic: str,
+    suspicious_only: bool,
 ) -> dict[str, object]:
     if duration < 1 or duration > 300:
         raise ValueError("--duration must be between 1 and 300 seconds.")
@@ -1610,32 +1857,49 @@ def scapy_sniff(
         raise ValueError("--count must be between 1 and 5000 packets.")
     if not ensure_python_package("scapy", auto_install=install_missing):
         raise ValueError("Scapy is not installed. Rerun with --install-missing or install scapy first.")
+    if traffic not in {"all", "http", "dns", "http-dns"}:
+        raise ValueError("--traffic must be one of: all, http, dns, http-dns.")
 
     from scapy.all import conf, sniff, wrpcap  # type: ignore[import-not-found]
 
     conf.verb = 0
-    summaries: list[str] = []
+    events: list[dict[str, object]] = []
     packets = []
+    active_filter = combine_bpf_filters(traffic, bpf_filter)
+    counters = {"total": 0, "shown": 0, "suspicious": 0, "dns": 0, "http": 0}
 
     def on_packet(packet: object) -> None:
-        summary = packet.summary()
-        summaries.append(summary)
-        print(f"[pkt] {summary}")
+        counters["total"] += 1
+        event = analyze_packet(packet)
+        proto = str(event["proto"]).lower()
+        if proto in counters:
+            counters[proto] += 1
+        if event["suspicious"]:
+            counters["suspicious"] += 1
+        if suspicious_only and not event["suspicious"]:
+            return
+        counters["shown"] += 1
+        events.append(event)
+        print(format_packet_event(event))
 
     print_section("Scapy Packet Sniffer")
     cyber_line("interface", interface or "default")
     cyber_line("duration", f"{duration}s")
     cyber_line("count", str(count))
-    if bpf_filter:
-        cyber_line("filter", bpf_filter)
-    print("[i] Captures summaries only unless --output is supplied. Use only on networks you administer.")
+    cyber_line("traffic", traffic)
+    if active_filter:
+        cyber_line("filter", active_filter)
+    if suspicious_only:
+        cyber_line("display", "suspicious traffic only")
+    print("[i] Readable DNS/HTTP view. Use only on networks you administer.")
+    print(color(" TIME   TYPE  FLOW                                DOMAIN / DETAIL", "90"))
 
     try:
         packets = sniff(
             iface=interface,
             timeout=duration,
             count=count,
-            filter=bpf_filter,
+            filter=active_filter,
             prn=on_packet,
             store=bool(output),
         )
@@ -1651,14 +1915,29 @@ def scapy_sniff(
         wrpcap(output, packets)
         print(f"[+] Wrote pcap: {output}")
 
+    print_section("Sniffer Summary")
+    print_key_value_table(
+        [
+            ("captured", str(counters["total"])),
+            ("displayed", str(counters["shown"])),
+            ("dns", str(counters["dns"])),
+            ("http", str(counters["http"])),
+            ("suspicious", str(counters["suspicious"])),
+        ]
+    )
+
     return {
         "interface": interface,
         "duration": duration,
         "count_limit": count,
-        "captured": len(summaries),
-        "filter": bpf_filter,
+        "captured": counters["total"],
+        "displayed": counters["shown"],
+        "traffic": traffic,
+        "filter": active_filter,
+        "suspicious_only": suspicious_only,
         "output": output,
-        "summaries": summaries,
+        "counters": counters,
+        "events": events,
     }
 
 
@@ -2112,6 +2391,15 @@ def build_parser() -> argparse.ArgumentParser:
     install_parser.add_argument("--execute", action="store_true", help="Run the install command.")
     install_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
+    sudo_parser = subparsers.add_parser("sudo-su", help="Relaunch Ktool through sudo for approved root access.")
+    sudo_parser.add_argument("--dry-run", action="store_true", help="Print the sudo command without running it.")
+    sudo_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+    sudo_parser.add_argument(
+        "ktool_args",
+        nargs=argparse.REMAINDER,
+        help="Ktool command args to run as root. Use -- before the command, or omit for the root menu.",
+    )
+
     dns_parser = subparsers.add_parser("dns", help="Resolve DNS information for a host.")
     add_common_run_options(dns_parser)
     dns_parser.add_argument("domain", help="Domain or hostname to resolve.")
@@ -2240,6 +2528,13 @@ def build_parser() -> argparse.ArgumentParser:
     sniff_parser.add_argument("--duration", type=int, default=20, help="Maximum sniff duration in seconds.")
     sniff_parser.add_argument("--count", type=int, default=100, help="Maximum packet count.")
     sniff_parser.add_argument("--filter", help="Optional BPF filter, for example 'tcp port 443'.")
+    sniff_parser.add_argument(
+        "--traffic",
+        choices=["all", "http", "dns", "http-dns"],
+        default="http-dns",
+        help="Built-in traffic view/filter.",
+    )
+    sniff_parser.add_argument("--suspicious-only", action="store_true", help="Only print traffic with suspicious indicators.")
     sniff_parser.add_argument("--output", help="Optional pcap output path.")
     sniff_parser.add_argument("--install-missing", action="store_true", help="Install Scapy automatically if it is missing.")
 
@@ -2273,7 +2568,7 @@ def build_parser() -> argparse.ArgumentParser:
     permission_parser.add_argument(
         "tool",
         nargs="?",
-        choices=["capture", "scapy-sniff", "lan-scan", "nmap", "ncat-chat", "all"],
+        choices=["sudo-su", "capture", "scapy-sniff", "lan-scan", "nmap", "ncat-chat", "all"],
         default="all",
         help="Tool to show guidance for.",
     )
@@ -2361,7 +2656,9 @@ def interactive_menu() -> None:
                 )
             elif choice == "12":
                 interface = input("Interface [default]: ").strip() or None
+                traffic = input("Traffic (http/dns/http-dns/all) [http-dns]: ").strip() or "http-dns"
                 bpf = input("BPF filter [none]: ").strip() or None
+                suspicious_only = input("Show suspicious only? [y/N]: ").strip().lower() in {"y", "yes"}
                 scapy_sniff(
                     interface=interface,
                     duration=20,
@@ -2369,6 +2666,8 @@ def interactive_menu() -> None:
                     bpf_filter=bpf,
                     output=None,
                     install_missing=False,
+                    traffic=traffic,
+                    suspicious_only=suspicious_only,
                 )
             elif choice == "13":
                 password = getpass.getpass("Password: ")
@@ -2409,9 +2708,12 @@ def interactive_menu() -> None:
                     no_ambiguous=True,
                 )
             elif choice == "17":
-                tool = input("Tool (all/capture/scapy-sniff/lan-scan/nmap/ncat-chat) [all]: ").strip() or "all"
-                permission_guide(tool)
+                command_text = input("Ktool args to run as root [blank for root menu]: ").strip()
+                sudo_su(shlex.split(command_text), dry_run=False)
             elif choice == "18":
+                tool = input("Tool (all/sudo-su/capture/scapy-sniff/lan-scan/nmap/ncat-chat) [all]: ").strip() or "all"
+                permission_guide(tool)
+            elif choice == "19":
                 path = input("Password candidate file: ").strip()
                 password_audit(
                     path,
@@ -2422,29 +2724,29 @@ def interactive_menu() -> None:
                     require_symbol=True,
                     show_values=False,
                 )
-            elif choice == "19":
+            elif choice == "20":
                 interface = input("Interface (eth0/wlan0): ").strip()
                 output = input("Output pcap [capture.pcap]: ").strip() or "capture.pcap"
                 packet_capture(interface, duration=20, count=100, output=output)
-            elif choice == "20":
-                wireless_info()
             elif choice == "21":
+                wireless_info()
+            elif choice == "22":
                 query = input("Searchsploit query (product/CVE/service): ").strip()
                 vuln_lookup(query, timeout=30.0)
-            elif choice == "22":
+            elif choice == "23":
                 company = input("Company name [the organization]: ").strip() or "the organization"
                 audience = input("Audience [employees]: ").strip() or "employees"
                 awareness_plan(company, audience)
-            elif choice == "23":
-                local_posture()
             elif choice == "24":
+                local_posture()
+            elif choice == "25":
                 tool = input("Tool name [all]: ").strip() or None
                 print_install_hints(tool)
-            elif choice == "25":
+            elif choice == "26":
                 tool = input(f"Tool ({', '.join(sorted(PACKAGE_NAMES))}): ").strip()
                 execute = input("Run installer now? [y/N]: ").strip().lower() in {"y", "yes"}
                 install_system_tool(tool, manager=None, execute=execute)
-            elif choice == "26":
+            elif choice == "27":
                 url = input("Base URL (https://example.com): ").strip()
                 use_nikto = input("Run Nikto if installed? [y/N]: ").strip().lower() in {"y", "yes"}
                 web_vulnerability_search(
@@ -2455,7 +2757,7 @@ def interactive_menu() -> None:
                     use_nikto=use_nikto,
                     nikto_timeout=180.0,
                 )
-            elif choice == "27":
+            elif choice == "28":
                 print_exit_screen("Session closed from the interactive menu.", 0)
                 break
             else:
@@ -2481,6 +2783,8 @@ def main(argv: list[str] | None = None) -> int:
             results = print_install_hints(args.tool)
         elif args.command == "install-tool":
             results = install_system_tool(args.tool, manager=args.manager, execute=args.execute)
+        elif args.command == "sudo-su":
+            results = sudo_su(args.ktool_args, dry_run=args.dry_run)
         elif args.command == "password-audit":
             results = password_audit(
                 args.file,
@@ -2597,6 +2901,8 @@ def main(argv: list[str] | None = None) -> int:
                 bpf_filter=args.filter,
                 output=args.output,
                 install_missing=args.install_missing,
+                traffic=args.traffic,
+                suspicious_only=args.suspicious_only,
             )
         elif args.command == "ncat-chat":
             results = ncat_chat(
@@ -2618,6 +2924,7 @@ def main(argv: list[str] | None = None) -> int:
             "tools",
             "install-hints",
             "install-tool",
+            "sudo-su",
             "password-audit",
             "password-check",
             "password-generate",

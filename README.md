@@ -47,6 +47,10 @@ ktool ports 127.0.0.1 --ports 22,80,443 --yes-i-am-authorized
 ktool lan-scan 192.168.1.0/24 --yes-i-am-authorized
 ktool lan-scan 192.168.1.0/24 --resolve-names --install-missing --yes-i-am-authorized
 ktool scapy-sniff --interface en0 --duration 20 --count 100 --filter "tcp port 443" --install-missing --yes-i-am-authorized
+ktool scapy-sniff --interface en0 --traffic dns --duration 20 --count 100 --yes-i-am-authorized
+ktool scapy-sniff --interface en0 --traffic http-dns --suspicious-only --yes-i-am-authorized
+ktool sudo-su --dry-run -- scapy-sniff --interface en0 --duration 20 --count 100 --yes-i-am-authorized
+ktool sudo-su -- capture en0 --duration 20 --count 100 --output capture.pcap --yes-i-am-authorized
 ktool capture en0 --duration 20 --count 100 --output capture.pcap --install-missing --yes-i-am-authorized
 ktool ncat-chat listen --port 4444 --install-missing --yes-i-am-authorized
 ktool ncat-chat send --host 192.168.1.50 --port 4444 --message "hello from ktool" --yes-i-am-authorized
@@ -120,6 +124,7 @@ ktool js-audit https://example.com --tools retire,semgrep,trufflehog --output js
 The external wrappers run the real Linux tools when they are installed. Use `install-tools` for package-manager tools and `install-hints` for tools that need Go, Python, npm, GitHub releases, or manual setup.
 For the single-file CLI commands in `tool.py`, `--install-missing` can install supported dependencies such as `nmap`, `ncat`, `tcpdump`, `whois`, or Python `scapy` with the detected package manager.
 Ktool does not bypass operating-system permissions. If packet capture or raw socket tools return `Operation not permitted`, use `ktool permission-guide` for approved fixes such as sudo, Linux capabilities, or macOS packet-capture setup.
+Use `ktool sudo-su -- <command args>` to relaunch one Ktool command through the operating system's approved sudo policy, or `ktool sudo-su` to open the interactive menu as root.
 Password commands use Python `secrets`; sensitive reports and admin password output files are written with mode `0600`.
 
 Use Ktool only on systems you own, lab environments, or targets where you have explicit written permission.
