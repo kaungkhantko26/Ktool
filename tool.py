@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -131,6 +131,9 @@ TOOL_NAME = "Ktool"
 TOOL_OWNER = "Ktool owner"
 USER_AGENT = "Ktool/2.0 (+authorized-security-testing)"
 TERMINAL_WIDTH = 78
+SHODAN_API_KEY_ENV = "SHODAN_API_KEY"
+NVD_API_KEY_ENV = "NVD_API_KEY"
+VIRUSTOTAL_API_KEY_ENV = "VIRUSTOTAL_API_KEY"
 
 PACKAGE_NAMES = {
     "hatch": {"brew": "hatch"},
@@ -330,7 +333,10 @@ def print_menu_panel() -> None:
         ("32", "Hatch Tool"),
         ("33", "Threat Site Triage"),
         ("34", "Defang / Refang IOC"),
-        ("35", "Exit"),
+        ("35", "Shodan Host Intelligence"),
+        ("36", "NVD CVE Lookup"),
+        ("37", "VirusTotal IOC Lookup"),
+        ("38", "Exit"),
     ]
     width = 54
     border = "+" + "-" * width + "+"
@@ -366,9 +372,15 @@ TOOL_CATEGORIES = {
     },
     "threat": {
         "title": "Threat Site Investigation",
-        "skills": ["Phishing triage", "IOC extraction", "Evidence collection", "Takedown support"],
-        "tools": ["whois", "nslookup", "hatch"],
-        "implemented": ["threat-site-triage", "defang"],
+        "skills": ["Phishing triage", "IOC extraction", "Evidence collection", "Threat intelligence enrichment", "Takedown support"],
+        "tools": ["whois", "nslookup", "hatch", "VirusTotal"],
+        "implemented": ["threat-site-triage", "defang", "virustotal"],
+    },
+    "intel": {
+        "title": "Exposure and Vulnerability Intelligence",
+        "skills": ["Passive internet exposure review", "CVE research", "Service-to-risk mapping"],
+        "tools": ["Shodan", "NVD", "VirusTotal", "searchsploit"],
+        "implemented": ["shodan", "cve-lookup", "virustotal", "vuln-lookup"],
     },
     "passwords": {
         "title": "Password Security Testing",
@@ -754,6 +766,65 @@ def http_request(url: str, method: str = "GET", timeout: float = 5.0) -> tuple[i
         raise ConnectionError(str(reason)) from error
 
 
+def api_key_value(provided: str | None, env_name: str, service_name: str) -> str:
+    api_key = (provided or os.environ.get(env_name) or "").strip()
+    if not api_key:
+        raise ValueError(f"{service_name} API key required. Pass --api-key or set {env_name}.")
+    return api_key
+
+
+def http_json_request(
+    url: str,
+    timeout: float,
+    headers: dict[str, str] | None = None,
+) -> dict[str, object]:
+    request_headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json",
+    }
+    if headers:
+        request_headers.update(headers)
+
+    request = Request(url, headers=request_headers)
+    try:
+        with urlopen(request, timeout=timeout, context=ssl.create_default_context()) as response:
+            body = response.read(1024 * 1024)
+            return json.loads(body.decode("utf-8", errors="replace"))
+    except HTTPError as error:
+        body = error.read(64 * 1024).decode("utf-8", errors="replace")
+        message = body
+        try:
+            parsed = json.loads(body)
+            if isinstance(parsed, dict):
+                message = str(parsed.get("message") or parsed.get("error") or parsed)
+        except json.JSONDecodeError:
+            pass
+        raise ConnectionError(f"HTTP {error.code}: {message}") from error
+    except URLError as error:
+        reason = getattr(error, "reason", error)
+        raise ConnectionError(str(reason)) from error
+    except json.JSONDecodeError as error:
+        raise ConnectionError(f"API response was not valid JSON: {error}") from error
+
+
+def first_public_ip(target: str) -> tuple[str, str | None]:
+    target = validate_host(target)
+    try:
+        address = ipaddress.ip_address(target)
+        return str(address), None
+    except ValueError:
+        pass
+
+    try:
+        infos = socket.getaddrinfo(target, None, type=socket.SOCK_STREAM)
+    except socket.gaierror as error:
+        raise ValueError(f"Could not resolve target for API lookup: {target}: {error}") from None
+    addresses = sorted({info[4][0] for info in infos})
+    if not addresses:
+        raise ValueError(f"No addresses resolved for {target}.")
+    return addresses[0], target
+
+
 def header_analyzer(url: str, timeout: float) -> HeaderResult:
     normalized = normalize_url(url)
     print(f"\n[+] Analyzing HTTP headers for {normalized}")
@@ -1052,6 +1123,308 @@ def web_vulnerability_search(
         "searchsploit": exploitdb_results,
         "nikto": nikto_result,
     }
+
+
+def summarize_shodan_service(banner: dict[str, object]) -> dict[str, object]:
+    ssl_info = banner.get("ssl") if isinstance(banner.get("ssl"), dict) else {}
+    vulns = banner.get("vulns") if isinstance(banner.get("vulns"), dict) else {}
+    return {
+        "ip": banner.get("ip_str"),
+        "port": banner.get("port"),
+        "transport": banner.get("transport", "tcp"),
+        "product": banner.get("product"),
+        "version": banner.get("version"),
+        "hostnames": banner.get("hostnames", []),
+        "domains": banner.get("domains", []),
+        "org": banner.get("org"),
+        "isp": banner.get("isp"),
+        "asn": banner.get("asn"),
+        "timestamp": banner.get("timestamp"),
+        "ssl_versions": sorted(ssl_info.get("versions", [])) if isinstance(ssl_info.get("versions"), list) else [],
+        "cves": sorted(vulns)[:25],
+        "banner_sample": str(banner.get("data") or "").strip()[:500],
+    }
+
+
+def shodan_lookup(
+    target: str,
+    api_key: str | None,
+    timeout: float,
+    history: bool,
+    minify: bool,
+) -> dict[str, object]:
+    key = api_key_value(api_key, SHODAN_API_KEY_ENV, "Shodan")
+    ip, resolved_from = first_public_ip(target)
+    params = {"key": key, "history": str(history).lower(), "minify": str(minify).lower()}
+    url = f"https://api.shodan.io/shodan/host/{ip}?{urlencode(params)}"
+
+    print_section("Shodan Host Intelligence")
+    cyber_line("target", target)
+    if resolved_from:
+        cyber_line("resolved ip", ip)
+    print("[i] Passive Shodan lookup only. This does not request a new internet scan.")
+
+    data = http_json_request(url, timeout=timeout)
+    banners = data.get("data") if isinstance(data.get("data"), list) else []
+    services = [
+        summarize_shodan_service(banner)
+        for banner in banners
+        if isinstance(banner, dict)
+    ]
+
+    summary = {
+        "ip": data.get("ip_str", ip),
+        "hostnames": data.get("hostnames", []),
+        "domains": data.get("domains", []),
+        "org": data.get("org"),
+        "isp": data.get("isp"),
+        "asn": data.get("asn"),
+        "country": data.get("country_name") or data.get("country_code"),
+        "os": data.get("os"),
+        "last_update": data.get("last_update"),
+        "ports": sorted(data.get("ports", [])) if isinstance(data.get("ports"), list) else [],
+    }
+
+    print_key_value_table(
+        [
+            ("ip", str(summary["ip"])),
+            ("org", str(summary.get("org") or "unknown")),
+            ("asn", str(summary.get("asn") or "unknown")),
+            ("country", str(summary.get("country") or "unknown")),
+            ("last update", str(summary.get("last_update") or "unknown")),
+            ("ports", ", ".join(str(port) for port in summary["ports"]) or "none"),
+        ]
+    )
+
+    if services:
+        print("\n[Services]")
+        for service in services[:25]:
+            product = " ".join(
+                str(value)
+                for value in (service.get("product"), service.get("version"))
+                if value
+            ) or "unknown service"
+            cves = service.get("cves") or []
+            cve_text = f" CVEs={','.join(str(cve) for cve in cves[:5])}" if cves else ""
+            print(f"  - {service.get('port')}/{service.get('transport')} {product}{cve_text}")
+        if len(services) > 25:
+            print(f"[i] Showing first 25 services out of {len(services)}.")
+    elif minify and summary["ports"]:
+        print("[i] Minified response returned host metadata and ports only.")
+    else:
+        print("[i] Shodan returned no service banners for this host.")
+
+    return {
+        "target": target,
+        "resolved_from": resolved_from,
+        "ip": ip,
+        "history": history,
+        "minify": minify,
+        "summary": summary,
+        "services": services,
+        "source": "https://api.shodan.io/shodan/host/{ip}",
+    }
+
+
+def cve_metric_summary(metrics: dict[str, object]) -> dict[str, object]:
+    for key in ("cvssMetricV40", "cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+        values = metrics.get(key)
+        if not isinstance(values, list) or not values:
+            continue
+        metric = values[0] if isinstance(values[0], dict) else {}
+        cvss_data = metric.get("cvssData") if isinstance(metric.get("cvssData"), dict) else {}
+        return {
+            "source": metric.get("source"),
+            "version": cvss_data.get("version") or key.replace("cvssMetric", "CVSS "),
+            "base_score": cvss_data.get("baseScore"),
+            "severity": cvss_data.get("baseSeverity") or metric.get("baseSeverity"),
+            "vector": cvss_data.get("vectorString"),
+        }
+    return {}
+
+
+def summarize_nvd_vulnerability(vulnerability: dict[str, object]) -> dict[str, object]:
+    cve = vulnerability.get("cve") if isinstance(vulnerability.get("cve"), dict) else {}
+    descriptions = cve.get("descriptions") if isinstance(cve.get("descriptions"), list) else []
+    english_description = ""
+    for description in descriptions:
+        if isinstance(description, dict) and description.get("lang") == "en":
+            english_description = str(description.get("value") or "")
+            break
+
+    references = cve.get("references") if isinstance(cve.get("references"), list) else []
+    reference_urls = [
+        str(item.get("url"))
+        for item in references
+        if isinstance(item, dict) and item.get("url")
+    ][:8]
+
+    weaknesses = cve.get("weaknesses") if isinstance(cve.get("weaknesses"), list) else []
+    weakness_ids: list[str] = []
+    for weakness in weaknesses:
+        if not isinstance(weakness, dict):
+            continue
+        for description in weakness.get("description", []):
+            if isinstance(description, dict) and description.get("value"):
+                weakness_ids.append(str(description["value"]))
+
+    return {
+        "id": cve.get("id"),
+        "published": cve.get("published"),
+        "last_modified": cve.get("lastModified"),
+        "status": cve.get("vulnStatus"),
+        "description": english_description[:700],
+        "metric": cve_metric_summary(cve.get("metrics", {}) if isinstance(cve.get("metrics"), dict) else {}),
+        "weaknesses": sorted(set(weakness_ids)),
+        "references": reference_urls,
+        "kev": {
+            "listed": bool(cve.get("cisaExploitAdd")),
+            "added": cve.get("cisaExploitAdd"),
+            "due": cve.get("cisaActionDue"),
+            "required_action": cve.get("cisaRequiredAction"),
+            "name": cve.get("cisaVulnerabilityName"),
+        },
+    }
+
+
+def cve_database_lookup(
+    query: str,
+    api_key: str | None,
+    timeout: float,
+    limit: int,
+    exact: bool,
+    severity: str | None,
+    kev_only: bool,
+) -> dict[str, object]:
+    query = query.strip()
+    if not query:
+        raise ValueError("CVE lookup query cannot be empty.")
+    if limit < 1 or limit > 50:
+        raise ValueError("--limit must be between 1 and 50.")
+    if severity and severity.upper() not in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}:
+        raise ValueError("--severity must be one of LOW, MEDIUM, HIGH, CRITICAL.")
+
+    params: dict[str, object] = {"resultsPerPage": limit, "noRejected": ""}
+    if re.fullmatch(r"CVE-\d{4}-\d{4,}", query, re.IGNORECASE):
+        params["cveId"] = query.upper()
+    else:
+        params["keywordSearch"] = query
+        if exact:
+            params["keywordExactMatch"] = ""
+    if severity:
+        params["cvssV3Severity"] = severity.upper()
+
+    query_parts = urlencode({key: value for key, value in params.items() if value != ""})
+    if "noRejected" in params:
+        query_parts += ("&" if query_parts else "") + "noRejected"
+    if "keywordExactMatch" in params:
+        query_parts += "&keywordExactMatch"
+    if kev_only:
+        query_parts += "&hasKev"
+
+    url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?{query_parts}"
+    headers = {}
+    key = (api_key or os.environ.get(NVD_API_KEY_ENV) or "").strip()
+    if key:
+        headers["apiKey"] = key
+
+    print_section("CVE Database Lookup")
+    cyber_line("source", "NVD CVE API 2.0")
+    cyber_line("query", query)
+    if severity:
+        cyber_line("severity", severity.upper())
+    if kev_only:
+        cyber_line("filter", "CISA KEV listed")
+
+    data = http_json_request(url, timeout=timeout, headers=headers or None)
+    vulnerabilities = data.get("vulnerabilities") if isinstance(data.get("vulnerabilities"), list) else []
+    summaries = [
+        summarize_nvd_vulnerability(item)
+        for item in vulnerabilities
+        if isinstance(item, dict)
+    ]
+
+    cyber_line("total matches", str(data.get("totalResults", len(summaries))))
+    if summaries:
+        print("\n[CVEs]")
+        for item in summaries:
+            metric = item.get("metric") if isinstance(item.get("metric"), dict) else {}
+            sev = str(metric.get("severity") or "UNKNOWN")
+            score = metric.get("base_score")
+            kev = " KEV" if isinstance(item.get("kev"), dict) and item["kev"].get("listed") else ""
+            print(f"  - {item.get('id')} {sev} {score if score is not None else '-'}{kev}")
+            description = str(item.get("description") or "")
+            if description:
+                print(f"    {description[:180]}{'...' if len(description) > 180 else ''}")
+    else:
+        print("[i] No NVD CVE records matched the query.")
+
+    return {
+        "query": query,
+        "limit": limit,
+        "exact": exact,
+        "severity": severity.upper() if severity else None,
+        "kev_only": kev_only,
+        "total_results": data.get("totalResults"),
+        "results": summaries,
+        "source": "https://services.nvd.nist.gov/rest/json/cves/2.0",
+    }
+
+
+def virustotal_lookup(indicator: str, api_key: str | None, timeout: float) -> dict[str, object]:
+    indicator = indicator.strip()
+    if not indicator:
+        raise ValueError("VirusTotal indicator cannot be empty.")
+    key = api_key_value(api_key, VIRUSTOTAL_API_KEY_ENV, "VirusTotal")
+    url = f"https://www.virustotal.com/api/v3/search?{urlencode({'query': indicator, 'limit': 1})}"
+
+    print_section("VirusTotal Intelligence")
+    cyber_line("indicator", defang_value(indicator))
+    print("[i] Reputation lookup only. Ktool does not upload files or submit URL scans.")
+
+    data = http_json_request(url, timeout=timeout, headers={"x-apikey": key})
+    matches = data.get("data") if isinstance(data.get("data"), list) else []
+    result: dict[str, object] = {
+        "indicator": indicator,
+        "matched": False,
+        "summary": {},
+        "source": "https://www.virustotal.com/api/v3/search",
+    }
+    if not matches:
+        print("[i] VirusTotal returned no matching objects.")
+        return result
+
+    first = matches[0] if isinstance(matches[0], dict) else {}
+    attributes = first.get("attributes") if isinstance(first.get("attributes"), dict) else {}
+    stats = attributes.get("last_analysis_stats") if isinstance(attributes.get("last_analysis_stats"), dict) else {}
+    summary = {
+        "id": first.get("id"),
+        "type": first.get("type"),
+        "reputation": attributes.get("reputation"),
+        "last_analysis_stats": stats,
+        "tags": attributes.get("tags", []),
+        "categories": attributes.get("categories", {}),
+        "last_analysis_date": attributes.get("last_analysis_date"),
+        "meaningful_name": attributes.get("meaningful_name"),
+    }
+    result["matched"] = True
+    result["summary"] = summary
+
+    malicious = stats.get("malicious", 0)
+    suspicious = stats.get("suspicious", 0)
+    print_key_value_table(
+        [
+            ("type", str(summary.get("type") or "unknown")),
+            ("id", str(summary.get("id") or "unknown")),
+            ("reputation", str(summary.get("reputation") if summary.get("reputation") is not None else "unknown")),
+            ("malicious", str(malicious)),
+            ("suspicious", str(suspicious)),
+        ]
+    )
+    tags = summary.get("tags")
+    if isinstance(tags, list) and tags:
+        print(f"[tags] {', '.join(str(tag) for tag in tags[:15])}")
+    return result
 
 
 def defang_value(value: str) -> str:
@@ -3096,6 +3469,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     web_vuln_parser.add_argument("--nikto-timeout", type=float, default=180.0, help="Nikto timeout in seconds.")
 
+    shodan_parser = subparsers.add_parser("shodan", help="Run a passive Shodan host intelligence lookup.")
+    add_common_run_options(shodan_parser)
+    shodan_parser.add_argument("target", help="Authorized host or IP address to look up.")
+    shodan_parser.add_argument("--api-key", help=f"Shodan API key. Defaults to {SHODAN_API_KEY_ENV}.")
+    shodan_parser.add_argument("--timeout", type=float, default=10.0, help="API timeout in seconds.")
+    shodan_parser.add_argument("--history", action="store_true", help="Ask Shodan for historical banners when available.")
+    shodan_parser.add_argument("--minify", action="store_true", help="Return Shodan's compact host response.")
+
+    cve_parser = subparsers.add_parser("cve-lookup", aliases=["cve", "nvd"], help="Search the NVD CVE database.")
+    cve_parser.add_argument("query", help="CVE ID or keyword query, for example CVE-2024-3094 or 'nginx 1.18'.")
+    cve_parser.add_argument("--api-key", help=f"Optional NVD API key. Defaults to {NVD_API_KEY_ENV}.")
+    cve_parser.add_argument("--timeout", type=float, default=20.0, help="API timeout in seconds.")
+    cve_parser.add_argument("--limit", type=int, default=10, help="Maximum CVE records to return.")
+    cve_parser.add_argument("--exact", action="store_true", help="Use NVD keywordExactMatch for phrase queries.")
+    cve_parser.add_argument("--severity", choices=["LOW", "MEDIUM", "HIGH", "CRITICAL"], help="Filter by CVSS v3 severity.")
+    cve_parser.add_argument("--kev-only", action="store_true", help="Only return CVEs listed in CISA KEV.")
+    cve_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    vt_parser = subparsers.add_parser("virustotal", aliases=["vt"], help="Look up an IOC in VirusTotal.")
+    vt_parser.add_argument("indicator", help="Hash, URL, domain, or IP address.")
+    vt_parser.add_argument("--api-key", help=f"VirusTotal API key. Defaults to {VIRUSTOTAL_API_KEY_ENV}.")
+    vt_parser.add_argument("--timeout", type=float, default=15.0, help="API timeout in seconds.")
+    vt_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
     threat_parser = subparsers.add_parser("threat-site-triage", help="Safely collect evidence from a suspected malicious website.")
     add_common_run_options(threat_parser)
     threat_parser.add_argument("url", help="Suspicious URL to triage. Defanged URLs are accepted.")
@@ -3456,6 +3853,27 @@ def interactive_menu() -> None:
                 values = shlex.split(input("Values: ").strip())
                 defang_iocs(values, refang=mode == "refang")
             elif choice == "35":
+                target = input("Authorized host/IP: ").strip()
+                api_key = input(f"Shodan API key [{SHODAN_API_KEY_ENV} env]: ").strip() or None
+                shodan_lookup(target, api_key=api_key, timeout=10.0, history=False, minify=False)
+            elif choice == "36":
+                query = input("CVE ID or keyword query: ").strip()
+                severity = input("Severity filter (LOW/MEDIUM/HIGH/CRITICAL) [none]: ").strip().upper() or None
+                kev_only = input("CISA KEV only? [y/N]: ").strip().lower() in {"y", "yes"}
+                cve_database_lookup(
+                    query,
+                    api_key=None,
+                    timeout=20.0,
+                    limit=10,
+                    exact=False,
+                    severity=severity,
+                    kev_only=kev_only,
+                )
+            elif choice == "37":
+                indicator = input("Hash, URL, domain, or IP: ").strip()
+                api_key = input(f"VirusTotal API key [{VIRUSTOTAL_API_KEY_ENV} env]: ").strip() or None
+                virustotal_lookup(indicator, api_key=api_key, timeout=15.0)
+            elif choice == "38":
                 print_exit_screen("Session closed from the interactive menu.", 0)
                 break
             else:
@@ -3533,6 +3951,22 @@ def main(argv: list[str] | None = None) -> int:
             results = ioc_triage(args.values)
         elif args.command == "defang":
             results = defang_iocs(args.values, refang=args.refang)
+        elif args.command in {"cve-lookup", "cve", "nvd"}:
+            results = cve_database_lookup(
+                args.query,
+                api_key=args.api_key,
+                timeout=args.timeout,
+                limit=args.limit,
+                exact=args.exact,
+                severity=args.severity,
+                kev_only=args.kev_only,
+            )
+        elif args.command in {"virustotal", "vt"}:
+            results = virustotal_lookup(
+                args.indicator,
+                api_key=args.api_key,
+                timeout=args.timeout,
+            )
         else:
             require_authorization(args.yes_i_am_authorized)
 
@@ -3576,6 +4010,14 @@ def main(argv: list[str] | None = None) -> int:
                 use_searchsploit=not args.no_searchsploit,
                 use_nikto=args.nikto,
                 nikto_timeout=args.nikto_timeout,
+            )
+        elif args.command == "shodan":
+            results = shodan_lookup(
+                args.target,
+                api_key=args.api_key,
+                timeout=args.timeout,
+                history=args.history,
+                minify=args.minify,
             )
         elif args.command == "threat-site-triage":
             results = threat_site_triage(
@@ -3664,6 +4106,11 @@ def main(argv: list[str] | None = None) -> int:
             "log-watch",
             "ioc-triage",
             "defang",
+            "cve-lookup",
+            "cve",
+            "nvd",
+            "virustotal",
+            "vt",
         }:
             pass
         else:

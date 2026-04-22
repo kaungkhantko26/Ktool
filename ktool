@@ -24,6 +24,15 @@ if [ ! -f "$SCRIPT_DIR/tool.py" ]; then
 fi
 
 if [ "$#" -eq 0 ]; then
-  exec python3 "$SCRIPT_DIR/tool.py"
+  python3 "$SCRIPT_DIR/tool.py"
+  STATUS=$?
+else
+  python3 "$SCRIPT_DIR/tool.py" "$@"
+  STATUS=$?
 fi
-exec python3 "$SCRIPT_DIR/tool.py" "$@"
+
+if [ -f "$SCRIPT_DIR/.ktool-auto-deploy" ] && [ "${KTOOL_SKIP_AUTO_DEPLOY:-}" != "1" ]; then
+  "$SCRIPT_DIR/ktool-auto-deploy.sh" run || true
+fi
+
+exit "$STATUS"

@@ -29,6 +29,25 @@ ktool version
 ktool doctor
 ```
 
+Enable automatic GitHub deploys on macOS:
+
+```bash
+./ktool-auto-deploy.sh install
+```
+
+This enables auto-deploy after normal `ktool` runs from your Terminal and also installs a macOS LaunchAgent that checks every 300 seconds. If macOS blocks the background agent from accessing a repo under `Desktop`, the after-`ktool` deploy still works because it runs from your Terminal session. To change the LaunchAgent interval:
+
+```bash
+./ktool-auto-deploy.sh install 120
+```
+
+Manage it:
+
+```bash
+./ktool-auto-deploy.sh status
+./ktool-auto-deploy.sh uninstall
+```
+
 Example authorized checks:
 
 ```bash
@@ -65,6 +84,12 @@ ktool live-workflow example.com --url https://example.com --ports common --yes-i
 ktool defang https://secure-login-account.top admin@example.com
 ktool defang --refang hxxps://secure-login-account[.]top
 ktool threat-site-triage https://secure-login-account.top --fetch-body --output-markdown reports/threat-site.md --yes-i-am-authorized
+ktool shodan 8.8.8.8 --yes-i-am-authorized
+ktool shodan example.com --minify --yes-i-am-authorized
+ktool cve-lookup CVE-2024-3094
+ktool cve-lookup "nginx 1.18" --severity HIGH --limit 5
+ktool virustotal 8.8.8.8
+ktool vt d41d8cd98f00b204e9800998ecf8427e
 ktool hatch --dry-run -- --version
 ktool hatch --install-missing -- --version
 ktool hatch -- env show
@@ -138,6 +163,7 @@ For the single-file CLI commands in `tool.py`, `--install-missing` can install s
 Ktool does not bypass operating-system permissions. If packet capture or raw socket tools return `Operation not permitted`, use `ktool permission-guide` for approved fixes such as sudo, Linux capabilities, or macOS packet-capture setup.
 Use `ktool sudo-su -- <command args>` to relaunch one Ktool command through the operating system's approved sudo policy, or `ktool sudo-su` to open the interactive menu as root.
 Password commands use Python `secrets`; sensitive reports and admin password output files are written with mode `0600`.
+API-backed intelligence commands use environment variables by default: `SHODAN_API_KEY`, `NVD_API_KEY`, and `VIRUSTOTAL_API_KEY`. You can also pass `--api-key` per command.
 
 Use Ktool only on systems you own, lab environments, or targets where you have explicit written permission.
 
@@ -167,4 +193,5 @@ If you copied the launcher scripts instead of installing symlinks, set the repo 
 export KTOOL_HOME="$HOME/Ktool"
 ```
 
-Starting `ktool` does not run Git commands. Use `update-ktool.sh` when you want to pull updates, and `./deploy.sh` only when you want to commit and push local changes.
+By default, starting `ktool` does not run Git commands. Use `update-ktool.sh` when you want to pull updates, and `./deploy.sh` only when you want to commit and push local changes.
+If auto-deploy is enabled, `ktool-auto-deploy.sh` runs `./deploy.sh` after normal `ktool` runs and in the background at the configured interval when macOS allows it.

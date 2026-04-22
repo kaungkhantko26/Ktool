@@ -33,7 +33,7 @@ fi
 
 # Older Ktool installs created update-ktool.sh locally before Git tracked it.
 # Move that untracked file out of the way so git pull can complete.
-for path in update-ktool.sh ktool install-commands.sh; do
+for path in update-ktool.sh ktool install-commands.sh ktool-auto-deploy.sh; do
   if [ -e "$path" ] && ! git ls-files --error-unmatch "$path" >/dev/null 2>&1; then
     backup="$path.local-backup.$(date +%Y%m%d%H%M%S)"
     echo "[i] Moving untracked $path to $backup before pull."
@@ -44,6 +44,6 @@ done
 git fetch origin main
 git pull --ff-only origin main
 
-chmod +x tool.py ktool deploy.sh update-ktool.sh install-commands.sh 2>/dev/null || true
+chmod +x tool.py ktool deploy.sh update-ktool.sh install-commands.sh ktool-auto-deploy.sh 2>/dev/null || true
 
 echo "[+] Ktool updated."
