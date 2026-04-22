@@ -24,6 +24,6 @@ if [ ! -f "$SCRIPT_DIR/tool.py" ]; then
 fi
 
 if [ "$#" -eq 0 ]; then
-  exec python3 "$SCRIPT_DIR/tool.py" Ktool
+  exec python3 "$SCRIPT_DIR/tool.py"
 fi
 exec python3 "$SCRIPT_DIR/tool.py" "$@"

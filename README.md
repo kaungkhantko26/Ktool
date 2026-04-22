@@ -44,6 +44,14 @@ ktool cookie-audit https://example.com --yes-i-am-authorized
 ktool link-check "https://example.com/login?token=test"
 ktool link-check "https://bit.ly/example" --fetch
 ktool ports 127.0.0.1 --ports 22,80,443 --yes-i-am-authorized
+ktool lan-scan 192.168.1.0/24 --yes-i-am-authorized
+ktool lan-scan 192.168.1.0/24 --resolve-names --install-missing --yes-i-am-authorized
+ktool scapy-sniff --interface en0 --duration 20 --count 100 --filter "tcp port 443" --install-missing --yes-i-am-authorized
+ktool capture en0 --duration 20 --count 100 --output capture.pcap --install-missing --yes-i-am-authorized
+ktool ncat-chat listen --port 4444 --install-missing --yes-i-am-authorized
+ktool ncat-chat send --host 192.168.1.50 --port 4444 --message "hello from ktool" --yes-i-am-authorized
+ktool password-check
+ktool password-generate --length 24 --count 5 --no-ambiguous
 ktool email-check admin@example.com --yes-i-am-authorized
 ktool email-domain example.com --dkim-selector default --yes-i-am-authorized
 ktool smtp-check mail.example.com --port 587 --starttls --yes-i-am-authorized
@@ -93,6 +101,8 @@ External tool wrappers:
 
 ```bash
 ktool external-examples
+ktool install-tool ncat
+ktool install-tool ncat --execute
 ktool install-tools --category web --manager apt
 ktool install-tools --category web --manager apt --execute
 ktool fingerprint https://example.com --tools whatweb,wafw00f,httpx --yes-i-am-authorized
@@ -105,6 +115,7 @@ ktool js-audit https://example.com --tools retire,semgrep,trufflehog --output js
 ```
 
 The external wrappers run the real Linux tools when they are installed. Use `install-tools` for package-manager tools and `install-hints` for tools that need Go, Python, npm, GitHub releases, or manual setup.
+For the single-file CLI commands in `tool.py`, `--install-missing` can install supported dependencies such as `nmap`, `ncat`, `tcpdump`, `whois`, or Python `scapy` with the detected package manager.
 
 Use Ktool only on systems you own, lab environments, or targets where you have explicit written permission.
 
