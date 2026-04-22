@@ -62,6 +62,9 @@ ktool conn-watch --iterations 5 --interval 3
 ktool log-watch /var/log/auth.log --alerts-only
 ktool ioc-triage 8.8.8.8 https://secure-login-account.top d41d8cd98f00b204e9800998ecf8427e
 ktool live-workflow example.com --url https://example.com --ports common --yes-i-am-authorized
+ktool hatch --dry-run -- --version
+ktool hatch --install-missing -- --version
+ktool hatch -- env show
 ktool permission-guide
 ktool permission-guide scapy-sniff
 ktool email-check admin@example.com --yes-i-am-authorized
@@ -113,6 +116,7 @@ External tool wrappers:
 
 ```bash
 ktool external-examples
+ktool install-hints hatch
 ktool install-tool ncat
 ktool install-tool ncat --execute
 ktool install-tools --category web --manager apt

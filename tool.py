@@ -133,6 +133,7 @@ USER_AGENT = "Ktool/2.0 (+authorized-security-testing)"
 TERMINAL_WIDTH = 78
 
 PACKAGE_NAMES = {
+    "hatch": {"brew": "hatch"},
     "nmap": {"apt": "nmap", "dnf": "nmap", "pacman": "nmap", "brew": "nmap"},
     "ncat": {"apt": "ncat", "dnf": "nmap-ncat", "pacman": "nmap", "brew": "nmap"},
     "nc": {"apt": "netcat-openbsd", "dnf": "nmap-ncat", "pacman": "openbsd-netcat", "brew": "netcat"},
@@ -304,7 +305,8 @@ def print_menu_panel() -> None:
         ("29", "Log Watch"),
         ("30", "IOC Triage"),
         ("31", "Authorized Live Workflow"),
-        ("32", "Exit"),
+        ("32", "Hatch Tool"),
+        ("33", "Exit"),
     ]
     width = 54
     border = "+" + "-" * width + "+"
@@ -386,6 +388,12 @@ TOOL_CATEGORIES = {
         "tools": ["linpeas", "winpeas"],
         "implemented": ["local-posture"],
     },
+    "tooling": {
+        "title": "Developer Tooling",
+        "skills": ["Python project environments", "Build automation", "Task runner integration"],
+        "tools": ["hatch"],
+        "implemented": ["hatch"],
+    },
 }
 
 TOOL_ALIASES = {
@@ -401,9 +409,16 @@ TOOL_ALIASES = {
     "nikto": ["nikto", "nikto.pl"],
     "ncat": ["ncat", "nc"],
     "nc": ["nc", "ncat", "netcat"],
+    "hatch": ["hatch"],
 }
 
 INSTALL_HINTS = {
+    "hatch": {
+        "Python user install": "python3 -m pip install --user hatch",
+        "pipx": "pipx install hatch",
+        "macOS": "brew install hatch",
+        "Ktool": "ktool hatch --install-missing -- --version",
+    },
     "scapy": {
         "Python": "python3 -m pip install --user scapy",
         "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install python3-scapy",
@@ -1147,6 +1162,73 @@ def ensure_python_package(module: str, auto_install: bool = False) -> bool:
     if output:
         print(output)
     return importlib.util.find_spec(module) is not None
+
+
+def find_hatch() -> str | None:
+    hatch_path = find_tool("hatch")
+    if hatch_path:
+        return hatch_path
+    user_hatch = Path.home() / ".local" / "bin" / "hatch"
+    if user_hatch.exists() and os.access(user_hatch, os.X_OK):
+        return str(user_hatch)
+    return None
+
+
+def ensure_hatch(auto_install: bool = False) -> str | None:
+    hatch_path = find_hatch()
+    if hatch_path:
+        return hatch_path
+    if not auto_install:
+        return None
+
+    command = [sys.executable, "-m", "pip", "install", "--user", "hatch"]
+    print_section("Hatch Installer")
+    cyber_line("command", " ".join(command))
+    result = run_external(command, timeout=900)
+    output = result.stdout.strip() or result.stderr.strip()
+    if output:
+        print(output)
+    return find_hatch()
+
+
+def hatch_tool(
+    hatch_args: list[str],
+    install_missing: bool,
+    timeout: float,
+    dry_run: bool,
+) -> dict[str, object]:
+    args = list(hatch_args)
+    if args and args[0] == "--":
+        args = args[1:]
+    if not args:
+        args = ["--version"]
+
+    hatch_path = ensure_hatch(auto_install=install_missing)
+    if dry_run and not hatch_path:
+        hatch_path = "hatch"
+    if not hatch_path:
+        raise ValueError("hatch is not installed. Use `ktool hatch --install-missing -- --version` or see `ktool install-hints hatch`.")
+
+    command = [hatch_path, *args]
+    print_section("Hatch Tool")
+    cyber_line("command", " ".join(shlex.quote(part) for part in command))
+    print("[i] Running the official Hatch CLI locally for Python project/tooling workflows.")
+
+    if dry_run:
+        return {"command": command, "executed": False}
+
+    result = run_external(command, timeout=timeout)
+    if result.stdout.strip():
+        print(result.stdout.strip())
+    if result.stderr.strip():
+        print(result.stderr.strip(), file=sys.stderr)
+    return {
+        "command": command,
+        "executed": True,
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
 
 
 def nmap_scan(
@@ -2712,6 +2794,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ktool command args to run as root. Use -- before the command, or omit for the root menu.",
     )
 
+    hatch_parser = subparsers.add_parser("hatch", help="Run the Hatch Python project/tooling CLI.")
+    hatch_parser.add_argument("--install-missing", action="store_true", help="Install Hatch with python -m pip install --user hatch if missing.")
+    hatch_parser.add_argument("--timeout", type=float, default=120.0, help="Hatch command timeout in seconds.")
+    hatch_parser.add_argument("--dry-run", action="store_true", help="Print the Hatch command without running it.")
+    hatch_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+    hatch_parser.add_argument(
+        "hatch_args",
+        nargs=argparse.REMAINDER,
+        help="Arguments passed to Hatch. Use -- before args that begin with a dash.",
+    )
+
     dns_parser = subparsers.add_parser("dns", help="Resolve DNS information for a host.")
     add_common_run_options(dns_parser)
     dns_parser.add_argument("domain", help="Domain or hostname to resolve.")
@@ -3110,6 +3203,10 @@ def interactive_menu() -> None:
                 ports = input("Ports [common]: ").strip() or "common"
                 live_workflow(target=target, url=url, ports=ports, timeout=0.7)
             elif choice == "32":
+                args = shlex.split(input("Hatch args [--version]: ").strip() or "--version")
+                install_missing = input("Install Hatch if missing? [y/N]: ").strip().lower() in {"y", "yes"}
+                hatch_tool(args, install_missing=install_missing, timeout=120.0, dry_run=False)
+            elif choice == "33":
                 print_exit_screen("Session closed from the interactive menu.", 0)
                 break
             else:
@@ -3137,6 +3234,13 @@ def main(argv: list[str] | None = None) -> int:
             results = install_system_tool(args.tool, manager=args.manager, execute=args.execute)
         elif args.command == "sudo-su":
             results = sudo_su(args.ktool_args, dry_run=args.dry_run)
+        elif args.command == "hatch":
+            results = hatch_tool(
+                args.hatch_args,
+                install_missing=args.install_missing,
+                timeout=args.timeout,
+                dry_run=args.dry_run,
+            )
         elif args.command == "password-audit":
             results = password_audit(
                 args.file,
@@ -3290,6 +3394,7 @@ def main(argv: list[str] | None = None) -> int:
             "install-hints",
             "install-tool",
             "sudo-su",
+            "hatch",
             "password-audit",
             "password-check",
             "password-generate",
