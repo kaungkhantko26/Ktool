@@ -92,6 +92,8 @@ ktool cve-lookup CVE-2024-3094
 ktool cve-lookup "nginx 1.18" --severity HIGH --limit 5
 ktool virustotal 8.8.8.8
 ktool vt d41d8cd98f00b204e9800998ecf8427e
+ktool mobile-artifact-audit ./sample.apk --report reports/mobile-audit.json
+ktool apk-audit ./decompiled-apk --all-iocs
 ktool hatch --dry-run -- --version
 ktool hatch --install-missing -- --version
 ktool hatch -- env show

@@ -30,6 +30,7 @@ import string
 import subprocess
 import sys
 import time
+import zipfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -215,6 +216,92 @@ IOC_REGEXES = {
     "sha1": re.compile(r"\b[a-fA-F0-9]{40}\b"),
     "sha256": re.compile(r"\b[a-fA-F0-9]{64}\b"),
 }
+ANDROID_DANGEROUS_PERMISSIONS = {
+    "android.permission.ACCEPT_HANDOVER",
+    "android.permission.ACCESS_BACKGROUND_LOCATION",
+    "android.permission.ACCESS_COARSE_LOCATION",
+    "android.permission.ACCESS_FINE_LOCATION",
+    "android.permission.ACTIVITY_RECOGNITION",
+    "android.permission.ADD_VOICEMAIL",
+    "android.permission.ANSWER_PHONE_CALLS",
+    "android.permission.BLUETOOTH_ADVERTISE",
+    "android.permission.BLUETOOTH_CONNECT",
+    "android.permission.BLUETOOTH_SCAN",
+    "android.permission.BODY_SENSORS",
+    "android.permission.CALL_PHONE",
+    "android.permission.CAMERA",
+    "android.permission.GET_ACCOUNTS",
+    "android.permission.POST_NOTIFICATIONS",
+    "android.permission.PROCESS_OUTGOING_CALLS",
+    "android.permission.READ_CALENDAR",
+    "android.permission.READ_CALL_LOG",
+    "android.permission.READ_CONTACTS",
+    "android.permission.READ_EXTERNAL_STORAGE",
+    "android.permission.READ_MEDIA_AUDIO",
+    "android.permission.READ_MEDIA_IMAGES",
+    "android.permission.READ_MEDIA_VIDEO",
+    "android.permission.READ_PHONE_NUMBERS",
+    "android.permission.READ_PHONE_STATE",
+    "android.permission.READ_SMS",
+    "android.permission.RECEIVE_MMS",
+    "android.permission.RECEIVE_SMS",
+    "android.permission.RECEIVE_WAP_PUSH",
+    "android.permission.RECORD_AUDIO",
+    "android.permission.SEND_SMS",
+    "android.permission.USE_SIP",
+    "android.permission.WRITE_CALENDAR",
+    "android.permission.WRITE_CALL_LOG",
+    "android.permission.WRITE_CONTACTS",
+    "android.permission.WRITE_EXTERNAL_STORAGE",
+}
+ANDROID_SENSITIVE_PERMISSIONS = ANDROID_DANGEROUS_PERMISSIONS | {
+    "android.permission.BIND_ACCESSIBILITY_SERVICE",
+    "android.permission.BIND_DEVICE_ADMIN",
+    "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE",
+    "android.permission.FOREGROUND_SERVICE",
+    "android.permission.INSTALL_PACKAGES",
+    "android.permission.MANAGE_EXTERNAL_STORAGE",
+    "android.permission.PACKAGE_USAGE_STATS",
+    "android.permission.QUERY_ALL_PACKAGES",
+    "android.permission.READ_LOGS",
+    "android.permission.RECEIVE_BOOT_COMPLETED",
+    "android.permission.REQUEST_DELETE_PACKAGES",
+    "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+    "android.permission.REQUEST_INSTALL_PACKAGES",
+    "android.permission.SYSTEM_ALERT_WINDOW",
+    "android.permission.USE_FULL_SCREEN_INTENT",
+    "android.permission.VPN_SERVICE",
+    "android.permission.WRITE_SETTINGS",
+}
+MOBILE_AUDIT_EXTENSIONS = {
+    ".xml",
+    ".json",
+    ".txt",
+    ".properties",
+    ".gradle",
+    ".smali",
+    ".java",
+    ".kt",
+    ".js",
+    ".ts",
+    ".html",
+    ".md",
+    ".yml",
+    ".yaml",
+}
+MOBILE_SUSPICIOUS_PATTERNS = [
+    ("high", "cleartext_url", re.compile(r"http://[^\s'\"<>]+", re.I)),
+    ("high", "hardcoded_private_key", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", re.I)),
+    ("high", "hardcoded_secret", re.compile(r"(api[_-]?key|secret|token|password|passwd)\s*[:=]\s*['\"][^'\"]{8,}", re.I)),
+    ("medium", "dynamic_code_loading", re.compile(r"\b(DexClassLoader|PathClassLoader|loadDex|loadClass)\b", re.I)),
+    ("medium", "native_library_loading", re.compile(r"\b(System\.loadLibrary|System\.load)\b", re.I)),
+    ("medium", "reflection_usage", re.compile(r"\b(Class\.forName|getDeclaredMethod|invoke\()\b", re.I)),
+    ("medium", "crypto_marker", re.compile(r"\b(AES|DESede|RSA/ECB|XOR|Base64\.decode|javax\.crypto)\b", re.I)),
+    ("medium", "root_or_debug_marker", re.compile(r"\b(su\b|magisk|xposed|frida|isDebuggerConnected|ro\.debuggable)\b", re.I)),
+    ("medium", "accessibility_marker", re.compile(r"\bAccessibilityService\b|BIND_ACCESSIBILITY_SERVICE", re.I)),
+    ("medium", "boot_persistence_marker", re.compile(r"\bBOOT_COMPLETED\b|RECEIVE_BOOT_COMPLETED", re.I)),
+    ("low", "webview_javascript", re.compile(r"\bsetJavaScriptEnabled\s*\(\s*true\s*\)", re.I)),
+]
 
 
 def supports_color() -> bool:
@@ -336,7 +423,8 @@ def print_menu_panel() -> None:
         ("35", "Shodan Host Intelligence"),
         ("36", "NVD CVE Lookup"),
         ("37", "VirusTotal IOC Lookup"),
-        ("38", "Exit"),
+        ("38", "Mobile Artifact Audit"),
+        ("39", "Exit"),
     ]
     width = 54
     border = "+" + "-" * width + "+"
@@ -378,9 +466,9 @@ TOOL_CATEGORIES = {
     },
     "intel": {
         "title": "Exposure and Vulnerability Intelligence",
-        "skills": ["Passive internet exposure review", "CVE research", "Service-to-risk mapping"],
-        "tools": ["Shodan", "NVD", "VirusTotal", "searchsploit"],
-        "implemented": ["shodan", "cve-lookup", "virustotal", "vuln-lookup"],
+        "skills": ["Passive internet exposure review", "CVE research", "Service-to-risk mapping", "Mobile artifact triage"],
+        "tools": ["Shodan", "NVD", "VirusTotal", "searchsploit", "apktool"],
+        "implemented": ["shodan", "cve-lookup", "virustotal", "vuln-lookup", "mobile-artifact-audit"],
     },
     "passwords": {
         "title": "Password Security Testing",
@@ -3130,6 +3218,188 @@ def vuln_lookup(query: str, timeout: float) -> dict[str, object]:
     }
 
 
+def readable_text_sample(data: bytes, limit: int) -> str:
+    return data[:limit].decode("utf-8", errors="ignore")
+
+
+def extract_android_permissions(text: str) -> list[str]:
+    matches = set(re.findall(r'android:name=["\']([^"\']+)["\']', text))
+    matches.update(re.findall(r"<uses-permission[^>]+name=['\"]([^'\"]+)['\"]", text, re.I))
+    matches.update(re.findall(r"\bandroid\.permission\.[A-Z0-9_]+", text))
+    return sorted(matches)
+
+
+def merge_ioc_sets(target: dict[str, set[str]], text: str) -> None:
+    extracted = extract_iocs_from_text(text)
+    for kind, values in extracted.items():
+        cleaned = {
+            value
+            for value in values
+            if not value.lower().startswith("android.permission")
+        }
+        target.setdefault(kind, set()).update(cleaned)
+
+
+def scan_mobile_text(
+    label: str,
+    text: str,
+    permissions: set[str],
+    iocs: dict[str, set[str]],
+    findings: list[dict[str, object]],
+) -> None:
+    permissions.update(extract_android_permissions(text))
+    merge_ioc_sets(iocs, text)
+    for severity, kind, pattern in MOBILE_SUSPICIOUS_PATTERNS:
+        if pattern.search(text):
+            findings.append({"severity": severity, "type": kind, "location": label})
+
+
+def iter_audit_files(root: Path, max_files: int) -> Iterable[Path]:
+    skipped_dirs = {".git", "__pycache__", "node_modules", "build", "dist", ".gradle"}
+    count = 0
+    for current_root, dirs, files in os.walk(root):
+        dirs[:] = [directory for directory in dirs if directory not in skipped_dirs]
+        for file_name in files:
+            path = Path(current_root) / file_name
+            if path.suffix.lower() not in MOBILE_AUDIT_EXTENSIONS and path.name != "AndroidManifest.xml":
+                continue
+            yield path
+            count += 1
+            if count >= max_files:
+                return
+
+
+def mobile_artifact_audit(
+    path: str,
+    max_files: int,
+    max_bytes: int,
+    include_all_iocs: bool,
+) -> dict[str, object]:
+    target = Path(path).expanduser()
+    if not target.exists():
+        raise ValueError(f"Artifact path not found: {target}")
+    if max_files < 1 or max_files > 5000:
+        raise ValueError("--max-files must be between 1 and 5000.")
+    if max_bytes < 1024 or max_bytes > 5_000_000:
+        raise ValueError("--max-bytes must be between 1024 and 5000000.")
+
+    print_section("Mobile Artifact Audit")
+    cyber_line("path", str(target))
+    print("[i] Defensive static triage only. This does not modify apps or generate payloads.")
+
+    permissions: set[str] = set()
+    iocs: dict[str, set[str]] = {key: set() for key in IOC_REGEXES}
+    findings: list[dict[str, object]] = []
+    scanned_files: list[str] = []
+    apk_entries: list[str] = []
+    errors: list[str] = []
+
+    if target.is_file() and target.suffix.lower() == ".apk":
+        try:
+            with zipfile.ZipFile(target) as archive:
+                apk_entries = archive.namelist()
+                for entry in apk_entries[:max_files]:
+                    suffix = Path(entry).suffix.lower()
+                    if suffix not in MOBILE_AUDIT_EXTENSIONS and Path(entry).name != "AndroidManifest.xml":
+                        continue
+                    try:
+                        data = archive.read(entry)[:max_bytes]
+                    except (KeyError, RuntimeError, zipfile.BadZipFile) as error:
+                        errors.append(f"{entry}: {error}")
+                        continue
+                    text = readable_text_sample(data, max_bytes)
+                    if not text.strip():
+                        continue
+                    scanned_files.append(entry)
+                    scan_mobile_text(entry, text, permissions, iocs, findings)
+        except zipfile.BadZipFile as error:
+            raise ValueError(f"APK is not a valid ZIP archive: {error}") from error
+    elif target.is_dir():
+        for file_path in iter_audit_files(target, max_files=max_files):
+            try:
+                text = file_path.read_text(encoding="utf-8", errors="ignore")[:max_bytes]
+            except OSError as error:
+                errors.append(f"{file_path}: {error}")
+                continue
+            if not text.strip():
+                continue
+            relative = str(file_path.relative_to(target))
+            scanned_files.append(relative)
+            scan_mobile_text(relative, text, permissions, iocs, findings)
+    else:
+        data = target.read_bytes()[:max_bytes]
+        text = readable_text_sample(data, max_bytes)
+        scanned_files.append(target.name)
+        scan_mobile_text(target.name, text, permissions, iocs, findings)
+
+    sensitive_permissions = sorted(permissions & ANDROID_SENSITIVE_PERMISSIONS)
+    dangerous_permissions = sorted(permissions & ANDROID_DANGEROUS_PERMISSIONS)
+    finding_keys: set[tuple[str, str, str]] = set()
+    unique_findings: list[dict[str, object]] = []
+    for finding in findings:
+        key = (str(finding["severity"]), str(finding["type"]), str(finding["location"]))
+        if key in finding_keys:
+            continue
+        finding_keys.add(key)
+        unique_findings.append(finding)
+
+    ioc_limit = 100 if include_all_iocs else 20
+    ioc_payload = {
+        kind: sorted(values)[:ioc_limit]
+        for kind, values in iocs.items()
+        if values
+    }
+
+    print_key_value_table(
+        [
+            ("files scanned", str(len(scanned_files))),
+            ("apk entries", str(len(apk_entries)) if apk_entries else "n/a"),
+            ("permissions", str(len(permissions))),
+            ("sensitive permissions", str(len(sensitive_permissions))),
+            ("findings", str(len(unique_findings))),
+        ]
+    )
+
+    if sensitive_permissions:
+        print("\n[Sensitive permissions]")
+        for permission in sensitive_permissions[:40]:
+            print(f"  - {permission}")
+        if len(sensitive_permissions) > 40:
+            print(f"[i] Showing first 40 sensitive permissions out of {len(sensitive_permissions)}.")
+
+    if unique_findings:
+        print("\n[Static indicators]")
+        for finding in unique_findings[:50]:
+            print(f"  - [{finding['severity'].upper()}] {finding['type']} in {finding['location']}")
+        if len(unique_findings) > 50:
+            print(f"[i] Showing first 50 findings out of {len(unique_findings)}.")
+    else:
+        print("[OK] No suspicious static indicators matched the local rules.")
+
+    if ioc_payload:
+        print("\n[IOC summary]")
+        for kind, values in ioc_payload.items():
+            preview = ", ".join(defang_value(value) for value in values[:10])
+            print(f"  - {kind}: {preview}")
+
+    return {
+        "path": str(target),
+        "artifact_type": "apk" if target.is_file() and target.suffix.lower() == ".apk" else "directory" if target.is_dir() else "file",
+        "files_scanned": scanned_files,
+        "apk_entries_sample": apk_entries[:100],
+        "permissions": sorted(permissions),
+        "dangerous_permissions": dangerous_permissions,
+        "sensitive_permissions": sensitive_permissions,
+        "iocs": ioc_payload,
+        "findings": unique_findings,
+        "errors": errors,
+        "notes": [
+            "Static triage only; confirm findings with authorized dynamic analysis in a lab.",
+            "No backdoors, bypass payloads, exploit code, or persistence code were generated.",
+        ],
+    }
+
+
 def awareness_plan(company_name: str, audience: str) -> dict[str, object]:
     company_name = company_name.strip() or "the organization"
     audience = audience.strip() or "employees"
@@ -3608,6 +3878,13 @@ def build_parser() -> argparse.ArgumentParser:
     ioc_parser.add_argument("values", nargs="+", help="IOC values to inspect.")
     ioc_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
+    mobile_parser = subparsers.add_parser("mobile-artifact-audit", aliases=["apk-audit"], help="Defensively audit an APK, decompiled APK folder, or mobile repo.")
+    mobile_parser.add_argument("path", help="Path to an APK, decompiled APK directory, or source/repo directory.")
+    mobile_parser.add_argument("--max-files", type=int, default=800, help="Maximum text-like files or APK entries to scan.")
+    mobile_parser.add_argument("--max-bytes", type=int, default=250000, help="Maximum bytes sampled per file.")
+    mobile_parser.add_argument("--all-iocs", action="store_true", help="Include up to 100 IOCs per type instead of 20.")
+    mobile_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
     live_parser = subparsers.add_parser("live-workflow", help="Run an authorized live DNS, port, and optional web baseline.")
     add_common_run_options(live_parser)
     live_parser.add_argument("target", help="Authorized host or IP target.")
@@ -3874,6 +4151,9 @@ def interactive_menu() -> None:
                 api_key = input(f"VirusTotal API key [{VIRUSTOTAL_API_KEY_ENV} env]: ").strip() or None
                 virustotal_lookup(indicator, api_key=api_key, timeout=15.0)
             elif choice == "38":
+                path = input("APK, decompiled APK folder, or repo path: ").strip()
+                mobile_artifact_audit(path, max_files=800, max_bytes=250000, include_all_iocs=False)
+            elif choice == "39":
                 print_exit_screen("Session closed from the interactive menu.", 0)
                 break
             else:
@@ -3949,6 +4229,13 @@ def main(argv: list[str] | None = None) -> int:
             results = log_watch(args.file, lines=args.lines, follow=args.follow, duration=args.duration, alerts_only=args.alerts_only)
         elif args.command == "ioc-triage":
             results = ioc_triage(args.values)
+        elif args.command in {"mobile-artifact-audit", "apk-audit"}:
+            results = mobile_artifact_audit(
+                args.path,
+                max_files=args.max_files,
+                max_bytes=args.max_bytes,
+                include_all_iocs=args.all_iocs,
+            )
         elif args.command == "defang":
             results = defang_iocs(args.values, refang=args.refang)
         elif args.command in {"cve-lookup", "cve", "nvd"}:
@@ -4105,6 +4392,8 @@ def main(argv: list[str] | None = None) -> int:
             "conn-watch",
             "log-watch",
             "ioc-triage",
+            "mobile-artifact-audit",
+            "apk-audit",
             "defang",
             "cve-lookup",
             "cve",
