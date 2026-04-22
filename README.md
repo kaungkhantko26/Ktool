@@ -62,6 +62,9 @@ ktool conn-watch --iterations 5 --interval 3
 ktool log-watch /var/log/auth.log --alerts-only
 ktool ioc-triage 8.8.8.8 https://secure-login-account.top d41d8cd98f00b204e9800998ecf8427e
 ktool live-workflow example.com --url https://example.com --ports common --yes-i-am-authorized
+ktool defang https://secure-login-account.top admin@example.com
+ktool defang --refang hxxps://secure-login-account[.]top
+ktool threat-site-triage https://secure-login-account.top --fetch-body --output-markdown reports/threat-site.md --yes-i-am-authorized
 ktool hatch --dry-run -- --version
 ktool hatch --install-missing -- --version
 ktool hatch -- env show

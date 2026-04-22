@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -190,6 +190,28 @@ LOG_PATTERNS = [
     ("medium", "scanner signature", re.compile(r"(nmap|nikto|sqlmap|masscan|zgrab|acunetix|nessus|openvas)", re.I)),
     ("high", "malware staging hint", re.compile(r"(curl .*\|.*sh|wget .*\|.*sh|chmod \+x|/tmp/[^ ]+\.sh)", re.I)),
 ]
+PHISHING_BRAND_MARKERS = {
+    "apple",
+    "icloud",
+    "google",
+    "microsoft",
+    "office",
+    "paypal",
+    "binance",
+    "coinbase",
+    "facebook",
+    "telegram",
+    "whatsapp",
+    "bank",
+}
+IOC_REGEXES = {
+    "ipv4": re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
+    "domain": re.compile(r"\b(?:[a-zA-Z0-9-]{1,63}\.)+(?:[a-zA-Z]{2,24})\b"),
+    "url": re.compile(r"https?://[^\s'\"<>]+", re.I),
+    "md5": re.compile(r"\b[a-fA-F0-9]{32}\b"),
+    "sha1": re.compile(r"\b[a-fA-F0-9]{40}\b"),
+    "sha256": re.compile(r"\b[a-fA-F0-9]{64}\b"),
+}
 
 
 def supports_color() -> bool:
@@ -306,7 +328,9 @@ def print_menu_panel() -> None:
         ("30", "IOC Triage"),
         ("31", "Authorized Live Workflow"),
         ("32", "Hatch Tool"),
-        ("33", "Exit"),
+        ("33", "Threat Site Triage"),
+        ("34", "Defang / Refang IOC"),
+        ("35", "Exit"),
     ]
     width = 54
     border = "+" + "-" * width + "+"
@@ -339,6 +363,12 @@ TOOL_CATEGORIES = {
         "skills": ["Security headers", "Common path discovery", "Proxy-based manual testing"],
         "tools": ["burpsuite", "zaproxy", "sqlmap", "ffuf", "nikto", "searchsploit"],
         "implemented": ["headers", "dirs", "web", "web-vuln-search"],
+    },
+    "threat": {
+        "title": "Threat Site Investigation",
+        "skills": ["Phishing triage", "IOC extraction", "Evidence collection", "Takedown support"],
+        "tools": ["whois", "nslookup", "hatch"],
+        "implemented": ["threat-site-triage", "defang"],
     },
     "passwords": {
         "title": "Password Security Testing",
@@ -1022,6 +1052,204 @@ def web_vulnerability_search(
         "searchsploit": exploitdb_results,
         "nikto": nikto_result,
     }
+
+
+def defang_value(value: str) -> str:
+    return (
+        value.replace("http://", "hxxp://")
+        .replace("https://", "hxxps://")
+        .replace(".", "[.]")
+        .replace("@", "[@]")
+    )
+
+
+def refang_value(value: str) -> str:
+    return (
+        value.replace("hxxps://", "https://")
+        .replace("hxxp://", "http://")
+        .replace("[.]", ".")
+        .replace("[@]", "@")
+    )
+
+
+def defang_iocs(values: list[str], refang: bool = False) -> list[dict[str, str]]:
+    if not values:
+        raise ValueError("Provide at least one value.")
+    print_section("IOC Defang" if not refang else "IOC Refang")
+    results: list[dict[str, str]] = []
+    for value in values:
+        converted = refang_value(value) if refang else defang_value(value)
+        print(f"{value} -> {converted}")
+        results.append({"input": value, "output": converted})
+    return results
+
+
+def extract_iocs_from_text(text: str, base_url: str | None = None) -> dict[str, list[str]]:
+    found: dict[str, set[str]] = {key: set() for key in IOC_REGEXES}
+    for kind, pattern in IOC_REGEXES.items():
+        for match in pattern.findall(text):
+            value = match.rstrip(").,;]")
+            if kind == "url" and base_url:
+                value = urljoin(base_url, value)
+            found[kind].add(value)
+    return {kind: sorted(values)[:100] for kind, values in found.items()}
+
+
+def tls_certificate_summary(hostname: str, port: int = 443, timeout: float = 5.0) -> dict[str, object]:
+    context = ssl.create_default_context()
+    with socket.create_connection((hostname, port), timeout=timeout) as sock:
+        with context.wrap_socket(sock, server_hostname=hostname) as tls_sock:
+            cert = tls_sock.getpeercert()
+    return {
+        "subject": cert.get("subject"),
+        "issuer": cert.get("issuer"),
+        "not_before": cert.get("notBefore"),
+        "not_after": cert.get("notAfter"),
+        "subject_alt_names": cert.get("subjectAltName", []),
+    }
+
+
+def phishing_indicators(url: str, headers: dict[str, str], body: bytes) -> list[dict[str, str]]:
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    text = body.decode("utf-8", errors="ignore")[:128000]
+    lower_text = text.lower()
+    indicators: list[dict[str, str]] = []
+
+    if re.search(r"<input[^>]+type=[\"']?password", lower_text):
+        indicators.append({"severity": "high", "indicator": "password input present"})
+    if re.search(r"<form[^>]+action=[\"']?http://", lower_text):
+        indicators.append({"severity": "high", "indicator": "form posts to cleartext HTTP"})
+
+    form_actions = re.findall(r"<form[^>]+action=[\"']?([^\"'\s>]+)", text, re.I)
+    for action in form_actions[:10]:
+        action_host = urlparse(urljoin(url, action)).hostname
+        if action_host and host and action_host.lower() != host.lower():
+            indicators.append({"severity": "high", "indicator": f"form posts to external host {action_host}"})
+
+    title_match = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
+    title = re.sub(r"\s+", " ", title_match.group(1)).strip() if title_match else ""
+    if title:
+        for brand in PHISHING_BRAND_MARKERS:
+            if brand in title.lower() and brand not in host.lower():
+                indicators.append({"severity": "medium", "indicator": f"title references brand not in hostname: {brand}"})
+
+    for keyword in ("verify your account", "account suspended", "unusual activity", "confirm your identity", "gift card"):
+        if keyword in lower_text:
+            indicators.append({"severity": "medium", "indicator": f"phishing phrase: {keyword}"})
+
+    if "Content-Security-Policy" not in headers:
+        indicators.append({"severity": "low", "indicator": "missing Content-Security-Policy"})
+    if parsed.scheme == "http":
+        indicators.append({"severity": "medium", "indicator": "cleartext HTTP page"})
+
+    unique: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for indicator in indicators:
+        key = indicator["indicator"]
+        if key not in seen:
+            seen.add(key)
+            unique.append(indicator)
+    return unique
+
+
+def threat_site_triage(url: str, timeout: float, fetch_body: bool, output_markdown: str | None) -> dict[str, object]:
+    normalized = normalize_url(refang_value(url))
+    parsed = urlparse(normalized)
+    host = parsed.hostname
+    if not host:
+        raise ValueError("URL must include a hostname.")
+
+    print_section("Threat Site Triage")
+    cyber_line("url", normalized)
+    cyber_line("defanged", defang_value(normalized))
+    print("[i] Defensive evidence collection only. Do not attack or disrupt third-party systems.")
+
+    result: dict[str, object] = {
+        "url": normalized,
+        "defanged_url": defang_value(normalized),
+        "host": host,
+        "dns": {},
+        "http": {},
+        "tls": None,
+        "iocs": {},
+        "indicators": [],
+        "takedown_report": None,
+    }
+
+    try:
+        result["dns"] = resolve_dns(host)
+    except ValueError as error:
+        result["dns"] = {"error": str(error)}
+
+    if parsed.scheme == "https":
+        try:
+            result["tls"] = tls_certificate_summary(host, timeout=timeout)
+            print("[TLS] certificate collected")
+        except (OSError, ssl.SSLError, TimeoutError) as error:
+            result["tls"] = {"error": str(error)}
+            print(f"[TLS] {error}")
+
+    method = "GET" if fetch_body else "HEAD"
+    try:
+        status, headers, body = http_request(normalized, method=method, timeout=timeout)
+        result["http"] = {
+            "method": method,
+            "status": status,
+            "headers": headers,
+            "body_sample_bytes": len(body),
+        }
+        print(f"[HTTP] {method} {status} ({len(body)} sampled bytes)")
+        if fetch_body:
+            result["iocs"] = extract_iocs_from_text(body.decode("utf-8", errors="ignore"), base_url=normalized)
+            result["indicators"] = phishing_indicators(normalized, headers, body)
+    except (ConnectionError, OSError) as error:
+        result["http"] = {"method": method, "error": str(error)}
+        print(f"[HTTP] {error}")
+
+    indicators = result.get("indicators", [])
+    if indicators:
+        print("\n[Indicators]")
+        for indicator in indicators:
+            print(f"[{indicator['severity'].upper()}] {indicator['indicator']}")
+
+    report_text = build_takedown_report(result)
+    result["takedown_report"] = report_text
+    if output_markdown:
+        Path(output_markdown).write_text(report_text, encoding="utf-8")
+        print(f"\n[+] Takedown evidence report saved to {output_markdown}")
+    return result
+
+
+def build_takedown_report(result: dict[str, object]) -> str:
+    http_data = result.get("http") if isinstance(result.get("http"), dict) else {}
+    indicators = result.get("indicators") if isinstance(result.get("indicators"), list) else []
+    lines = [
+        "# Threat Site Evidence Report",
+        "",
+        f"- URL: {result.get('defanged_url')}",
+        f"- Host: {result.get('host')}",
+        f"- Generated UTC: {datetime.now(timezone.utc).isoformat()}",
+        f"- HTTP status: {http_data.get('status', http_data.get('error', 'unknown')) if isinstance(http_data, dict) else 'unknown'}",
+        "",
+        "## Indicators",
+    ]
+    if indicators:
+        for indicator in indicators:
+            lines.append(f"- {indicator['severity'].upper()}: {indicator['indicator']}")
+    else:
+        lines.append("- No local phishing indicators found in sampled content.")
+    lines.extend(
+        [
+            "",
+            "## Recommended Actions",
+            "- Preserve this report with timestamps and source context.",
+            "- Submit to the registrar, hosting provider, CDN, and brand abuse mailbox where applicable.",
+            "- Block the defanged URL/domain in approved security controls if policy allows.",
+            "- Do not run exploit, brute force, or denial-of-service activity against the site.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
 
 
 def find_tool(tool: str) -> str | None:
@@ -2868,6 +3096,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     web_vuln_parser.add_argument("--nikto-timeout", type=float, default=180.0, help="Nikto timeout in seconds.")
 
+    threat_parser = subparsers.add_parser("threat-site-triage", help="Safely collect evidence from a suspected malicious website.")
+    add_common_run_options(threat_parser)
+    threat_parser.add_argument("url", help="Suspicious URL to triage. Defanged URLs are accepted.")
+    threat_parser.add_argument("--timeout", type=float, default=5.0, help="Network timeout in seconds.")
+    threat_parser.add_argument("--fetch-body", action="store_true", help="Fetch a small body sample for IOC and phishing checks.")
+    threat_parser.add_argument("--output-markdown", help="Write a takedown evidence report to this path.")
+
+    defang_parser = subparsers.add_parser("defang", help="Defang or refang URLs, domains, emails, and IOC values.")
+    defang_parser.add_argument("values", nargs="+", help="Values to defang/refang.")
+    defang_parser.add_argument("--refang", action="store_true", help="Convert defanged values back to normal form.")
+    defang_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
     nmap_parser = subparsers.add_parser("nmap", help="Run a conservative nmap service scan.")
     add_common_run_options(nmap_parser)
     nmap_parser.add_argument("target", help="Hostname or IP address.")
@@ -3207,6 +3447,15 @@ def interactive_menu() -> None:
                 install_missing = input("Install Hatch if missing? [y/N]: ").strip().lower() in {"y", "yes"}
                 hatch_tool(args, install_missing=install_missing, timeout=120.0, dry_run=False)
             elif choice == "33":
+                url = input("Suspicious URL: ").strip()
+                fetch_body = input("Fetch body sample? [y/N]: ").strip().lower() in {"y", "yes"}
+                output = input("Markdown report path [optional]: ").strip() or None
+                threat_site_triage(url, timeout=5.0, fetch_body=fetch_body, output_markdown=output)
+            elif choice == "34":
+                mode = input("Mode (defang/refang) [defang]: ").strip().lower() or "defang"
+                values = shlex.split(input("Values: ").strip())
+                defang_iocs(values, refang=mode == "refang")
+            elif choice == "35":
                 print_exit_screen("Session closed from the interactive menu.", 0)
                 break
             else:
@@ -3282,6 +3531,8 @@ def main(argv: list[str] | None = None) -> int:
             results = log_watch(args.file, lines=args.lines, follow=args.follow, duration=args.duration, alerts_only=args.alerts_only)
         elif args.command == "ioc-triage":
             results = ioc_triage(args.values)
+        elif args.command == "defang":
+            results = defang_iocs(args.values, refang=args.refang)
         else:
             require_authorization(args.yes_i_am_authorized)
 
@@ -3325,6 +3576,13 @@ def main(argv: list[str] | None = None) -> int:
                 use_searchsploit=not args.no_searchsploit,
                 use_nikto=args.nikto,
                 nikto_timeout=args.nikto_timeout,
+            )
+        elif args.command == "threat-site-triage":
+            results = threat_site_triage(
+                args.url,
+                timeout=args.timeout,
+                fetch_body=args.fetch_body,
+                output_markdown=args.output_markdown,
             )
         elif args.command == "nmap":
             results = nmap_scan(
@@ -3405,6 +3663,7 @@ def main(argv: list[str] | None = None) -> int:
             "conn-watch",
             "log-watch",
             "ioc-triage",
+            "defang",
         }:
             pass
         else:
