@@ -20,7 +20,7 @@ else
 fi
 
 PLIST_PATH="${HOME}/Library/LaunchAgents/${LABEL}.plist"
-LOG_DIR="${HOME}/Library/Logs/Ktool"
+LOG_DIR="${HOME}/Library/Logs/KTOOL-FieldOps"
 LOCK_DIR="${TMPDIR:-/tmp}/ktool-auto-deploy.lock"
 
 usage() {
@@ -78,7 +78,7 @@ EOF
 
 enable_after_ktool() {
   touch "$SCRIPT_DIR/.ktool-auto-deploy"
-  echo "[+] Ktool auto-deploy enabled after normal ktool runs."
+  echo "[+] KTOOL FieldOps auto-deploy enabled after normal ktool runs."
 }
 
 schedule_agent() {
@@ -92,7 +92,7 @@ schedule_agent() {
   launchctl bootout "gui/$(id -u)" "$PLIST_PATH" >/dev/null 2>&1 || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH"
   launchctl enable "gui/$(id -u)/${LABEL}" >/dev/null 2>&1 || true
-  echo "[+] Ktool auto-deploy enabled every ${interval}s."
+  echo "[+] KTOOL FieldOps auto-deploy enabled every ${interval}s."
   echo "[i] Logs: ${LOG_DIR}/auto-deploy.log and ${LOG_DIR}/auto-deploy.err"
 }
 
@@ -101,13 +101,13 @@ unschedule_agent() {
     launchctl bootout "gui/$(id -u)" "$PLIST_PATH" >/dev/null 2>&1 || true
   fi
   rm -f "$PLIST_PATH"
-  echo "[+] Ktool background auto-deploy disabled."
+  echo "[+] KTOOL FieldOps background auto-deploy disabled."
 }
 
 uninstall_agent() {
   unschedule_agent
   rm -f "$SCRIPT_DIR/.ktool-auto-deploy"
-  echo "[+] Ktool auto-deploy disabled."
+  echo "[+] KTOOL FieldOps auto-deploy disabled."
 }
 
 status_agent() {
@@ -132,7 +132,7 @@ run_once() {
   cd "$SCRIPT_DIR"
 
   if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    echo "[ERROR] Ktool folder is not a Git repository: $SCRIPT_DIR"
+    echo "[ERROR] KTOOL FieldOps folder is not a Git repository: $SCRIPT_DIR"
     exit 1
   fi
   if ! git remote get-url origin >/dev/null 2>&1; then
@@ -147,11 +147,11 @@ run_once() {
   trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
 
   if git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
-    echo "[i] No Ktool changes to auto-deploy."
+    echo "[i] No KTOOL FieldOps changes to auto-deploy."
     exit 0
   fi
 
-  message="Auto deploy Ktool updates $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  message="Auto deploy KTOOL FieldOps updates $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   "$SCRIPT_DIR/deploy.sh" "$message"
 }
 

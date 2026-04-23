@@ -17,7 +17,7 @@ else
 fi
 
 if [ ! -f "$SCRIPT_DIR/tool.py" ]; then
-  echo "[ERROR] Ktool cannot find tool.py in: $SCRIPT_DIR" >&2
+  echo "[ERROR] KTOOL FieldOps cannot find tool.py in: $SCRIPT_DIR" >&2
   echo "        If you copied the launcher, set KTOOL_HOME to your repo path." >&2
   echo "        Example: export KTOOL_HOME=\"\$HOME/Ktool\"" >&2
   exit 1

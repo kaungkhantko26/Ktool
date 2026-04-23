@@ -1,6 +1,6 @@
-# KTOOL LabOps
+# KTOOL FieldOps
 
-KTOOL LabOps is a terminal-first assessment console for authorized work: labs, owned systems, and written-scope security testing. It focuses on recon, web hygiene, defensive triage, lab workflows, and operator productivity without crossing into brute force, phishing, persistence, or exploit automation.
+KTOOL FieldOps is a terminal-first security operations console for authorized work: labs, owned systems, and written-scope security testing. It focuses on recon, web hygiene, defensive triage, workflow readiness, reporting, and operator productivity without crossing into brute force, phishing, persistence, or exploit automation.
 
 ## Principles
 
@@ -42,6 +42,7 @@ Check operator readiness:
 ```bash
 ktool doctor
 ktool doctor --category web
+ktool workflow-ready
 ```
 
 `doctor` verifies:
@@ -65,9 +66,11 @@ Useful shortcuts inside the menu:
 - `?` or `help`: show shortcut guidance
 - `q`, `quit`, or `exit`: leave the console
 - `1`: run `doctor`
+- `39`: run `workflow-ready`
 - `47`: run the `target-brief` workflow
 - `48`: run the `recon-workflow`
 - `49`: run the `web-workflow`
+- `50`: build a workspace-level aggregated report
 
 ## Core Workflows
 
@@ -86,7 +89,16 @@ The workflow writes:
 - JSON results under `scans/` and `reports/`
 - a Markdown summary under `notes/target-brief.md`
 
-### 2. Lab Workspace
+### 2. Workflow Readiness
+
+Use this before relying on wrappers or external tools in a real engagement:
+
+```bash
+ktool workflow-ready
+ktool ready --workflow web-workflow --workflow vps-check
+```
+
+### 3. Lab Workspace
 
 Create a repeatable workspace before deeper testing:
 
@@ -94,7 +106,7 @@ Create a repeatable workspace before deeper testing:
 ktool lab-init acme-external --client "ACME" --target example.com
 ```
 
-### 3. TryHackMe Workflow
+### 4. TryHackMe Workflow
 
 Use the built-in room workflow for first-pass lab setup and safe enumeration:
 
@@ -103,7 +115,7 @@ ktool thm --room steel-mountain --target 10.10.10.10 --yes-i-am-authorized
 ktool tryhackme --room steel-mountain --target 10.10.10.10 --content-scan --yes-i-am-authorized
 ```
 
-### 4. Recon Workflow
+### 5. Recon Workflow
 
 Use this when you want a real first-pass host workflow with saved artifacts and a client-ready report:
 
@@ -111,7 +123,7 @@ Use this when you want a real first-pass host workflow with saved artifacts and 
 ktool recon-workflow example.com --yes-i-am-authorized
 ```
 
-### 5. Web Workflow
+### 6. Web Workflow
 
 Use this when a web app is in scope and you want baseline, findings, and reporting in one run:
 
@@ -159,6 +171,16 @@ ktool capture en0 --duration 20 --count 100 --output capture.pcap --yes-i-am-aut
 ktool scapy-sniff --interface en0 --traffic dns --duration 20 --count 100 --yes-i-am-authorized
 ktool conn-watch --iterations 5 --interval 3
 ktool log-watch /var/log/auth.log --alerts-only
+```
+
+### Local Triage Workspaces
+
+`conn-watch`, `log-watch`, and `mobile-artifact-audit` now write a workspace, normalized findings, and a client-ready Markdown report:
+
+```bash
+ktool conn-watch --iterations 3 --output-dir engagements/conn-review
+ktool log-watch /var/log/auth.log --alerts-only --output-dir engagements/authlog-review
+ktool mobile-artifact-audit ./sample-apk-src --output-dir engagements/mobile-review
 ```
 
 ### VPS Operations
@@ -212,7 +234,14 @@ Report behavior:
 - sensitive outputs such as generated passwords are written with mode `0600`
 - `target-brief`, `recon-workflow`, and `web-workflow` also write normalized findings under `findings/`
 - workflow runs also generate client-ready Markdown reports under `reports/`
-- `local-posture` and `vps-check` now follow the same workspace/reporting pattern
+- `local-posture`, `vps-check`, `conn-watch`, `log-watch`, and `mobile-artifact-audit` now follow the same workspace/reporting pattern
+
+Aggregate one workspace into a single rolled-up report:
+
+```bash
+ktool report engagements/mobile-review
+ktool report engagements/acme-external --title "ACME External Assessment Report"
+```
 
 ## External Tool Wrappers
 

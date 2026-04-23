@@ -17,7 +17,7 @@ else
 fi
 cd "$SCRIPT_DIR"
 
-echo "[+] Updating Ktool ..."
+echo "[+] Updating KTOOL FieldOps ..."
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "[ERROR] This folder is not a Git repository: $SCRIPT_DIR"
@@ -31,7 +31,7 @@ if ! git remote get-url origin >/dev/null 2>&1; then
   exit 1
 fi
 
-# Older Ktool installs created update-ktool.sh locally before Git tracked it.
+# Older KTOOL installs created update-ktool.sh locally before Git tracked it.
 # Move that untracked file out of the way so git pull can complete.
 for path in update-ktool.sh ktool install-commands.sh ktool-auto-deploy.sh; do
   if [ -e "$path" ] && ! git ls-files --error-unmatch "$path" >/dev/null 2>&1; then
@@ -46,4 +46,4 @@ git pull --ff-only origin main
 
 chmod +x tool.py ktool deploy.sh update-ktool.sh install-commands.sh ktool-auto-deploy.sh 2>/dev/null || true
 
-echo "[+] Ktool updated."
+echo "[+] KTOOL FieldOps updated."

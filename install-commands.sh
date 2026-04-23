@@ -24,7 +24,7 @@ ln -sf "$SCRIPT_DIR/ktool" "$BIN_DIR/ktool"
 ln -sf "$SCRIPT_DIR/update-ktool.sh" "$BIN_DIR/update-ktool.sh"
 ln -sf "$SCRIPT_DIR/ktool-auto-deploy.sh" "$BIN_DIR/ktool-auto-deploy.sh"
 
-echo "[+] Installed Ktool commands:"
+echo "[+] Installed KTOOL FieldOps commands:"
 echo "    $BIN_DIR/ktool"
 echo "    $BIN_DIR/update-ktool.sh"
 echo "    $BIN_DIR/ktool-auto-deploy.sh"

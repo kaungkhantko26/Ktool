@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KTOOL LabOps - Linux-friendly lab and assessment console.
+KTOOL FieldOps - terminal-first authorized security operations console.
 
 Use this tool only on systems you own or have explicit written permission to
 test. The active checks here focus on reconnaissance, defensive visibility,
@@ -131,13 +131,13 @@ SECURITY_HEADERS = {
     "Permissions-Policy": "Restricts powerful browser features.",
 }
 
-TOOL_NAME = "KTOOL LabOps"
-TOOL_VERSION = "3.1.0"
-TOOL_OWNER = "LabOps user"
-TOOL_TAGLINE = "authorized lab and web assessment console"
+TOOL_NAME = "KTOOL FieldOps"
+TOOL_VERSION = "4.0.0"
+TOOL_OWNER = "Field operator"
+TOOL_TAGLINE = "authorized security operations console"
 TOOL_COMMAND = "ktool"
 MYANMAR_FLAG = "🇲🇲"
-USER_AGENT = "KTOOL-LabOps/3.0 (+authorized-security-testing)"
+USER_AGENT = "KTOOL-FieldOps/4.0 (+authorized-security-operations)"
 TERMINAL_WIDTH = 78
 SHODAN_API_KEY_ENV = "SHODAN_API_KEY"
 NVD_API_KEY_ENV = "NVD_API_KEY"
@@ -161,6 +161,7 @@ PACKAGE_NAMES = {
     "sslscan": {"apt": "sslscan", "dnf": "sslscan", "pacman": "sslscan", "brew": "sslscan"},
     "whois": {"apt": "whois", "dnf": "whois", "pacman": "whois", "brew": "whois"},
     "tcpdump": {"apt": "tcpdump", "dnf": "tcpdump", "pacman": "tcpdump", "brew": "tcpdump"},
+    "lsof": {"apt": "lsof", "dnf": "lsof", "pacman": "lsof", "brew": "lsof"},
     "nikto": {"apt": "nikto", "dnf": "nikto", "pacman": "nikto", "brew": "nikto"},
     "wafw00f": {"apt": "wafw00f", "pacman": "wafw00f", "brew": "wafw00f"},
     "whatweb": {"apt": "whatweb", "pacman": "whatweb", "brew": "whatweb"},
@@ -403,7 +404,7 @@ def print_startup_banner() -> None:
     print(color(f"        {TOOL_TAGLINE}", "36"))
     print(color(f"        profile: {TOOL_OWNER}", "36"))
     print(color(f"        version: {TOOL_VERSION}", "36"))
-    print(color("        workflow: doctor | target-brief | recon | web | tryhackme | local defense", "90"))
+    print(color("        workflow: doctor | readiness | brief | recon | web | report | defense", "90"))
     print(color("        active checks require explicit permission or a lab target", "90"))
 
 
@@ -413,6 +414,7 @@ def print_menu_panel() -> None:
             "START",
             [
                 ("1", "Operator Doctor"),
+                ("39", "Workflow Readiness"),
                 ("2", "Tool Availability Check"),
                 ("25", "Install Hints"),
                 ("26", "Install Tool"),
@@ -448,6 +450,7 @@ def print_menu_panel() -> None:
                 ("47", "Target Brief Workflow"),
                 ("48", "Recon Workflow"),
                 ("49", "Web Workflow"),
+                ("50", "Workspace Report"),
                 ("42", "Lab Workspace Setup"),
                 ("43", "TryHackMe Room Workflow"),
             ],
@@ -477,7 +480,7 @@ def print_menu_panel() -> None:
                 ("14", "Password Generator"),
                 ("15", "ncat Port Messenger"),
                 ("16", "Admin Password Generator"),
-                ("17", "Run LabOps as Root"),
+                ("17", "Run FieldOps as Root"),
                 ("18", "Permission Guide"),
                 ("19", "Password Policy Audit"),
                 ("23", "Awareness Plan Builder"),
@@ -505,32 +508,32 @@ def print_menu_panel() -> None:
 TOOL_CATEGORIES = {
     "recon": {
         "title": "Reconnaissance",
-        "skills": ["DNS lookup", "WHOIS lookup", "Subdomain discovery"],
-        "tools": ["whois", "nslookup", "theHarvester", "amass", "sublist3r"],
-        "implemented": ["dns", "whois", "subs"],
+        "skills": ["DNS lookup", "WHOIS lookup", "Subdomain discovery", "First-pass target brief"],
+        "tools": ["whois", "amass", "subfinder", "dnsrecon", "nmap"],
+        "implemented": ["dns", "whois", "subs", "target-brief", "recon-workflow"],
     },
     "scan": {
         "title": "Scanning and Enumeration",
         "skills": ["TCP scanning", "Service detection", "Basic web exposure checks"],
-        "tools": ["nmap", "masscan", "nc", "nikto"],
-        "implemented": ["ports", "nmap"],
+        "tools": ["nmap", "nikto", "nc"],
+        "implemented": ["ports", "nmap", "content-discovery"],
     },
     "web": {
         "title": "Web Application Testing",
-        "skills": ["Security headers", "Common path discovery", "Fingerprinting", "Proxy-based manual testing"],
-        "tools": ["burpsuite", "zaproxy", "gobuster", "ffuf", "dirb", "seclists", "whatweb", "wafw00f", "nikto", "searchsploit"],
-        "implemented": ["headers", "dirs", "web", "web-vuln-search", "content-discovery", "fingerprint", "web-scan", "js-audit"],
+        "skills": ["Security headers", "Common path discovery", "Fingerprinting", "TLS review", "JavaScript audit"],
+        "tools": ["gobuster", "ffuf", "dirb", "seclists", "whatweb", "wafw00f", "nikto", "searchsploit", "httpx", "sslscan", "testssl.sh", "nuclei"],
+        "implemented": ["headers", "dirs", "web", "web-vuln-search", "content-discovery", "fingerprint", "tls-audit", "web-scan", "js-audit", "web-workflow"],
     },
     "threat": {
         "title": "Threat Site Investigation",
         "skills": ["Phishing triage", "IOC extraction", "Evidence collection", "Threat intelligence enrichment", "Takedown support"],
-        "tools": ["whois", "nslookup", "hatch", "VirusTotal"],
+        "tools": ["whois", "hatch"],
         "implemented": ["threat-site-triage", "defang", "virustotal"],
     },
     "intel": {
         "title": "Exposure and Vulnerability Intelligence",
         "skills": ["Passive internet exposure review", "CVE research", "Service-to-risk mapping", "TLS review", "Mobile artifact triage"],
-        "tools": ["Shodan", "NVD", "VirusTotal", "searchsploit", "apktool", "testssl.sh", "sslscan", "nuclei"],
+        "tools": ["searchsploit", "testssl.sh", "sslscan", "nuclei"],
         "implemented": ["shodan", "cve-lookup", "virustotal", "vuln-lookup", "tls-audit", "mobile-artifact-audit"],
     },
     "passwords": {
@@ -542,7 +545,7 @@ TOOL_CATEGORIES = {
     "network": {
         "title": "Network Security Testing",
         "skills": ["TCP/IP", "Ports", "Firewalls", "VPNs", "Packet capture", "LAN inventory"],
-        "tools": ["wireshark", "tcpdump", "scapy", "ncat", "nc"],
+        "tools": ["lsof", "tcpdump", "scapy", "ncat", "nc"],
         "implemented": [
             "capture",
             "scapy-sniff",
@@ -559,13 +562,13 @@ TOOL_CATEGORIES = {
     "wireless": {
         "title": "Wireless Security",
         "skills": ["WiFi audit on owned networks only", "Capture analysis"],
-        "tools": ["aircrack-ng", "airodump-ng", "kismet", "iw", "nmcli"],
+        "tools": ["iw", "nmcli"],
         "implemented": ["wireless-info", "tools"],
     },
     "exploitation": {
         "title": "Exploitation Research",
         "skills": ["Lab validation", "Vulnerability research", "Patch verification"],
-        "tools": ["msfconsole", "searchsploit"],
+        "tools": ["searchsploit"],
         "implemented": ["vuln-lookup"],
     },
     "awareness": {
@@ -577,7 +580,7 @@ TOOL_CATEGORIES = {
     "post": {
         "title": "Post-Exploitation Defense Review",
         "skills": ["Privilege escalation concepts", "Incident response perspective"],
-        "tools": ["linpeas", "winpeas"],
+        "tools": ["sudo", "find", "id", "uname"],
         "implemented": ["local-posture"],
     },
     "tooling": {
@@ -589,7 +592,7 @@ TOOL_CATEGORIES = {
     "vps": {
         "title": "VPS Operations",
         "skills": ["Storage checks", "PM2 process review", "Service status", "Read-only SSH health checks", "Deployment directory inventory"],
-        "tools": ["ssh", "pm2", "docker", "systemctl", "journalctl", "df", "du", "ls", "ss"],
+        "tools": ["ssh"],
         "implemented": ["vps-check"],
     },
 }
@@ -672,24 +675,148 @@ EXTERNAL_WRAPPER_TOOLS = {
     "js-audit": ["retire", "semgrep", "trufflehog"],
 }
 
+WORKFLOW_REQUIREMENTS = {
+    "target-brief": {
+        "title": "Target Brief",
+        "required_tools": [],
+        "recommended_tools": ["whois"],
+        "required_data": [],
+        "recommended_data": [],
+        "required_env": [],
+        "recommended_env": [],
+        "required_python": [],
+        "recommended_python": [],
+    },
+    "recon-workflow": {
+        "title": "Recon Workflow",
+        "required_tools": ["nmap"],
+        "recommended_tools": ["whois", "amass", "subfinder", "dnsrecon"],
+        "required_data": [],
+        "recommended_data": ["subdomains"],
+        "required_env": [],
+        "recommended_env": [],
+        "required_python": [],
+        "recommended_python": [],
+    },
+    "web-workflow": {
+        "title": "Web Workflow",
+        "required_tools": ["searchsploit"],
+        "recommended_tools": ["gobuster", "ffuf", "seclists", "whatweb", "wafw00f", "httpx", "testssl.sh", "sslscan", "nikto", "retire", "semgrep", "trufflehog"],
+        "required_data": [],
+        "recommended_data": ["directory-small"],
+        "required_env": [],
+        "recommended_env": [],
+        "required_python": [],
+        "recommended_python": [],
+    },
+    "local-posture": {
+        "title": "Local Posture Workflow",
+        "required_tools": [],
+        "recommended_tools": [],
+        "required_data": [],
+        "recommended_data": [],
+        "required_env": [],
+        "recommended_env": [],
+        "required_python": [],
+        "recommended_python": [],
+    },
+    "vps-check": {
+        "title": "VPS Health Workflow",
+        "required_tools": ["ssh"],
+        "recommended_tools": ["pm2", "docker"],
+        "required_data": [],
+        "recommended_data": [],
+        "required_env": [],
+        "recommended_env": [],
+        "required_python": [],
+        "recommended_python": [],
+    },
+    "conn-watch": {
+        "title": "Connection Watch",
+        "required_tools": ["lsof"],
+        "recommended_tools": [],
+        "required_data": [],
+        "recommended_data": [],
+        "required_env": [],
+        "recommended_env": [],
+        "required_python": [],
+        "recommended_python": [],
+    },
+    "log-watch": {
+        "title": "Log Watch",
+        "required_tools": [],
+        "recommended_tools": [],
+        "required_data": [],
+        "recommended_data": [],
+        "required_env": [],
+        "recommended_env": [],
+        "required_python": [],
+        "recommended_python": [],
+    },
+    "mobile-artifact-audit": {
+        "title": "Mobile Artifact Audit",
+        "required_tools": [],
+        "recommended_tools": [],
+        "required_data": [],
+        "recommended_data": [],
+        "required_env": [],
+        "recommended_env": [],
+        "required_python": [],
+        "recommended_python": [],
+    },
+    "threat-site-triage": {
+        "title": "Threat Site Triage",
+        "required_tools": [],
+        "recommended_tools": ["whois"],
+        "required_data": [],
+        "recommended_data": [],
+        "required_env": [],
+        "recommended_env": [VIRUSTOTAL_API_KEY_ENV],
+        "required_python": [],
+        "recommended_python": [],
+    },
+    "capture": {
+        "title": "Packet Capture",
+        "required_tools": ["tcpdump"],
+        "recommended_tools": [],
+        "required_data": [],
+        "recommended_data": [],
+        "required_env": [],
+        "recommended_env": [],
+        "required_python": [],
+        "recommended_python": [],
+    },
+    "scapy-sniff": {
+        "title": "Scapy Sniffer",
+        "required_tools": [],
+        "recommended_tools": [],
+        "required_data": [],
+        "recommended_data": [],
+        "required_env": [],
+        "recommended_env": [],
+        "required_python": ["scapy"],
+        "recommended_python": [],
+    },
+}
+
 INSTALL_HINTS = {
     "hatch": {
         "Python user install": "python3 -m pip install --user hatch",
         "pipx": "pipx install hatch",
         "macOS": "brew install hatch",
-        "LabOps": "ktool hatch --install-missing -- --version",
+        "FieldOps": "ktool hatch --install-missing -- --version",
     },
     "gobuster": {
         "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install gobuster",
         "Arch": "sudo pacman -S gobuster",
         "macOS": "brew install gobuster",
-        "LabOps": "ktool install-tool gobuster --execute",
+        "FieldOps": "ktool install-tool gobuster --execute",
     },
     "dirb": {
         "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install dirb",
         "Kali": "dirb is usually available from the Kali repositories.",
         "Manual": "Use Gobuster or FFUF if your platform does not package Dirb.",
-        "LabOps": "ktool install-tool dirb --execute",
+        "FieldOps": "ktool install-tool dirb --execute",
     },
     "ssh": {
         "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install openssh-client",
@@ -829,6 +956,12 @@ INSTALL_HINTS = {
         "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install network-manager",
         "Arch": "sudo pacman -S networkmanager",
         "Fedora": "sudo dnf install NetworkManager",
+    },
+    "lsof": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install lsof",
+        "Arch": "sudo pacman -S lsof",
+        "Fedora": "sudo dnf install lsof",
+        "macOS": "brew install lsof",
     },
 }
 
@@ -3378,6 +3511,369 @@ def normalize_vps_findings(asset: str, results: list[dict[str, object]], source:
     return sorted(deduped.values(), key=finding_sort_key)
 
 
+def dedupe_normalized_findings(findings: list[NormalizedFinding]) -> list[NormalizedFinding]:
+    severity_order = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+    deduped: dict[str, NormalizedFinding] = {}
+    for finding in findings:
+        existing = deduped.get(finding.finding_id)
+        if existing is None:
+            deduped[finding.finding_id] = finding
+            continue
+        if severity_order.get(finding.severity, 0) > severity_order.get(existing.severity, 0):
+            deduped[finding.finding_id] = finding
+    return sorted(deduped.values(), key=finding_sort_key)
+
+
+def normalize_connection_findings(
+    asset: str,
+    snapshots: list[dict[str, object]],
+    source: str,
+) -> list[NormalizedFinding]:
+    findings: list[NormalizedFinding] = []
+    for snapshot in snapshots:
+        for connection in snapshot.get("connections", []):
+            if not isinstance(connection, dict) or not connection.get("suspicious"):
+                continue
+            local = str(connection.get("local") or "")
+            remote = str(connection.get("remote") or "")
+            state = str(connection.get("state") or "").upper()
+            local_port = parse_endpoint_port(local)
+            remote_port = parse_endpoint_port(remote)
+            reasons = [str(reason) for reason in connection.get("reasons", [])]
+            port_risk = any(port in HIGH_RISK_LISTEN_PORTS or port in SUSPICIOUS_PORTS for port in (local_port, remote_port) if port)
+            if not port_risk and set(reasons) <= {"external remote endpoint"}:
+                continue
+            severity = "medium"
+            if any(port in {23, 2323, 4444, 5555, 6667, 1337, 31337} for port in (local_port, remote_port)):
+                severity = "critical" if state == "LISTEN" else "high"
+            elif any(port in HIGH_RISK_LISTEN_PORTS for port in (local_port, remote_port)):
+                severity = "high"
+            elif "external remote endpoint" in reasons and "listening on all interfaces" in reasons:
+                severity = "high"
+            title = "Suspicious Listening Service Detected" if state == "LISTEN" else "Suspicious Network Connection Detected"
+            flow = local or "-"
+            if remote:
+                flow += f" -> {remote}"
+            evidence = f"{connection.get('command')}[{connection.get('pid')}] {state or '-'} {flow}"
+            if reasons:
+                evidence += " [" + "; ".join(reasons) + "]"
+            findings.append(
+                NormalizedFinding(
+                    finding_id=finding_identifier(source, asset, title + flow),
+                    title=title,
+                    severity=severity,
+                    category="network",
+                    asset=asset,
+                    source=source,
+                    evidence=evidence,
+                    impact="Unexpected external sessions or exposed listeners can expand attack surface and may indicate policy drift or unwanted software behavior.",
+                    remediation="Validate the owning process, confirm whether the port or peer is approved, and restrict exposure with binding, firewalling, or service hardening where needed.",
+                )
+            )
+    return dedupe_normalized_findings(findings)
+
+
+def normalize_log_findings(asset: str, events: list[dict[str, object]], source: str) -> list[NormalizedFinding]:
+    summaries: dict[tuple[str, str], dict[str, object]] = {}
+    metadata = {
+        "auth failure": (
+            "Repeated Authentication Failures Observed",
+            "auth",
+            "Repeated failed logins can indicate password guessing, invalid account targeting, or misconfigured automation.",
+            "Review source IPs, usernames, and rate controls, then block or throttle abusive sources and fix invalid automation.",
+        ),
+        "successful remote login": (
+            "Successful Remote Login Activity Observed",
+            "auth",
+            "Remote logins can be legitimate, but they should line up with expected operators, maintenance windows, and bastion policy.",
+            "Confirm the operator, source, and access path; tighten SSH exposure or centralize access if the logins are unexpected.",
+        ),
+        "sudo usage": (
+            "Privileged Command Activity Logged",
+            "privilege",
+            "Sudo activity changes the trust boundary on the host and deserves review when it is unusual or poorly scoped.",
+            "Review the command history and operator context, and ensure least-privilege sudo rules match current administration needs.",
+        ),
+        "web attack pattern": (
+            "Web Attack Payloads Detected in Logs",
+            "web",
+            "Attack payloads in logs often indicate active probing or exploitation attempts against exposed application paths.",
+            "Review the targeted endpoint, verify filtering and patching, and block or rate-limit abusive sources as appropriate.",
+        ),
+        "scanner signature": (
+            "Security Scanner Signatures Observed",
+            "recon",
+            "Scanner signatures indicate reconnaissance or validation activity against exposed services.",
+            "Verify whether the traffic is expected from internal tooling; otherwise rate-limit, block, or tune exposure and monitoring.",
+        ),
+        "malware staging hint": (
+            "Malware Staging Pattern Detected in Logs",
+            "malware",
+            "Shell-pipe download patterns and temporary execution paths can indicate attempted malware staging or unsafe automation.",
+            "Isolate the source context, inspect parent process history, and contain or remove any unauthorized payloads or scripts.",
+        ),
+    }
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        line = str(event.get("line") or "").strip()
+        for match in event.get("findings", []):
+            if not isinstance(match, dict):
+                continue
+            label = str(match.get("type") or "log alert")
+            severity = str(match.get("severity") or "medium").lower()
+            key = (label, severity)
+            summary = summaries.setdefault(key, {"count": 0, "samples": []})
+            summary["count"] = int(summary["count"]) + 1
+            samples = summary["samples"]
+            if isinstance(samples, list) and line and len(samples) < 3 and line not in samples:
+                samples.append(line[:240])
+
+    findings: list[NormalizedFinding] = []
+    for (label, severity), summary in summaries.items():
+        title, category, impact, remediation = metadata.get(
+            label,
+            (
+                f"Repeated Log Pattern: {label.title()}",
+                "logs",
+                "Repeated security-relevant log patterns can indicate operational drift, probing, or abuse attempts that merit triage.",
+                "Review the full surrounding log context, source systems, and recurrence before deciding whether escalation is required.",
+            ),
+        )
+        samples = summary.get("samples", [])
+        evidence = f"{summary['count']} matching lines"
+        if isinstance(samples, list) and samples:
+            evidence += ". Samples: " + " | ".join(str(sample) for sample in samples)
+        findings.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, f"{label}-{severity}"),
+                title=title,
+                severity="high" if severity == "high" else "medium",
+                category=category,
+                asset=asset,
+                source=source,
+                evidence=evidence,
+                impact=impact,
+                remediation=remediation,
+            )
+        )
+    return dedupe_normalized_findings(findings)
+
+
+def normalize_mobile_findings(asset: str, result: dict[str, object], source: str) -> list[NormalizedFinding]:
+    findings: list[NormalizedFinding] = []
+    high_risk_permissions = {
+        "android.permission.BIND_ACCESSIBILITY_SERVICE",
+        "android.permission.BIND_DEVICE_ADMIN",
+        "android.permission.INSTALL_PACKAGES",
+        "android.permission.MANAGE_EXTERNAL_STORAGE",
+        "android.permission.PACKAGE_USAGE_STATS",
+        "android.permission.QUERY_ALL_PACKAGES",
+        "android.permission.READ_LOGS",
+        "android.permission.REQUEST_INSTALL_PACKAGES",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.VPN_SERVICE",
+        "android.permission.WRITE_SETTINGS",
+    }
+    sensitive_permissions = [str(item) for item in result.get("sensitive_permissions", [])]
+    dangerous_permissions = [str(item) for item in result.get("dangerous_permissions", [])]
+    risky_permissions = sorted(set(sensitive_permissions) & high_risk_permissions)
+    if risky_permissions:
+        findings.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, "high-risk-mobile-permissions"),
+                title="High-Risk Android Permissions Requested",
+                severity="high",
+                category="permissions",
+                asset=asset,
+                source=source,
+                evidence=", ".join(risky_permissions[:12]),
+                impact="High-risk permissions can enable broad data access, user deception, package installation, overlay behavior, or device control.",
+                remediation="Confirm each permission against the app's business purpose and remove permissions that are not required for the intended feature set.",
+            )
+        )
+    if len(dangerous_permissions) >= 6:
+        findings.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, "broad-dangerous-permission-set"),
+                title="Broad Dangerous Permission Set Requested",
+                severity="medium",
+                category="permissions",
+                asset=asset,
+                source=source,
+                evidence=f"{len(dangerous_permissions)} dangerous permissions: " + ", ".join(dangerous_permissions[:12]),
+                impact="A broad dangerous-permission footprint increases review burden and user-impact risk if the app is compromised or abused.",
+                remediation="Reduce requested permissions to the minimum needed and separate optional or privileged features behind explicit user consent flows.",
+            )
+        )
+
+    finding_metadata = {
+        "cleartext_url": ("Cleartext Endpoint References Found", "high", "network", "Cleartext HTTP endpoints can expose data in transit and often indicate weaker transport controls.", "Move app traffic to HTTPS-only endpoints and remove or fence any legacy cleartext URLs."),
+        "hardcoded_private_key": ("Hardcoded Private Key Material Found", "critical", "secrets", "Embedded private keys materially weaken trust boundaries and can enable impersonation or traffic interception.", "Remove embedded key material immediately, rotate affected keys, and load secrets from secure server-side or platform-protected stores."),
+        "hardcoded_secret": ("Hardcoded Application Secret Found", "high", "secrets", "Hardcoded credentials or tokens can be extracted from builds and reused against backend services or third parties.", "Remove the secret from the client, rotate it, and move the trust decision to a managed backend or secure broker."),
+        "dynamic_code_loading": ("Dynamic Code Loading Pattern Found", "medium", "code", "Dynamic code loading complicates trust review and can expand the impact of supply-chain or tampering issues.", "Review whether dynamic loading is necessary and constrain loaded code to trusted, integrity-verified sources."),
+        "native_library_loading": ("Native Library Loading Pattern Found", "medium", "code", "Native code increases the reverse-engineering and memory-safety review surface of the app.", "Review loaded libraries, signing, provenance, and whether native code is needed for the feature."),
+        "reflection_usage": ("Reflection Usage Found", "medium", "code", "Heavy reflection makes behavior harder to analyze and may conceal sensitive execution paths.", "Review reflective calls and replace them with explicit interfaces where practical."),
+        "crypto_marker": ("Custom or Inline Cryptography Markers Found", "medium", "crypto", "Client-side cryptographic markers deserve review because misuse can weaken confidentiality or integrity controls.", "Review cipher choices, key handling, and whether sensitive decisions should instead happen on the server side."),
+        "root_or_debug_marker": ("Root or Debug Environment Checks Found", "low", "runtime", "Root or debugger checks can be legitimate, but they often accompany anti-analysis or tamper-control logic that needs review.", "Confirm whether the checks are expected and document their purpose and limitations."),
+        "accessibility_marker": ("Accessibility Service Hooks Found", "high", "permissions", "Accessibility hooks can be abused for overlay, click automation, or content observation if the app role does not require them.", "Verify the accessibility use case and remove the capability if it is not central to the product function."),
+        "boot_persistence_marker": ("Boot Persistence Hooks Found", "medium", "persistence", "Auto-start behavior broadens persistence and background execution risk on the device.", "Review whether boot-time execution is essential and minimize or remove it when possible."),
+        "webview_javascript": ("WebView JavaScript Enabled", "low", "web", "WebView JavaScript support may be legitimate but increases the importance of origin control and URL handling review.", "Constrain WebView content to trusted origins and review file access, bridge exposure, and navigation policy."),
+    }
+    static_findings = result.get("findings", [])
+    grouped_static: dict[tuple[str, str], dict[str, object]] = {}
+    for item in static_findings:
+        if not isinstance(item, dict):
+            continue
+        finding_type = str(item.get("type") or "")
+        severity = str(item.get("severity") or "low").lower()
+        location = str(item.get("location") or "")
+        key = (finding_type, severity)
+        summary = grouped_static.setdefault(key, {"count": 0, "locations": []})
+        summary["count"] = int(summary["count"]) + 1
+        locations = summary["locations"]
+        if isinstance(locations, list) and location and len(locations) < 5 and location not in locations:
+            locations.append(location)
+    for (finding_type, severity), summary in grouped_static.items():
+        title, normalized_severity, category, impact, remediation = finding_metadata.get(
+            finding_type,
+            (
+                f"Static Mobile Indicator: {finding_type}",
+                severity,
+                "mobile",
+                "Suspicious static indicators in mobile artifacts warrant manual review before the app is trusted in production.",
+                "Review the affected files, confirm intent, and remove or justify the flagged pattern.",
+            ),
+        )
+        evidence = f"{summary['count']} matching locations"
+        locations = summary.get("locations", [])
+        if isinstance(locations, list) and locations:
+            evidence += ": " + ", ".join(str(location) for location in locations)
+        findings.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, finding_type),
+                title=title,
+                severity=normalized_severity,
+                category=category,
+                asset=asset,
+                source=source,
+                evidence=evidence,
+                impact=impact,
+                remediation=remediation,
+            )
+        )
+
+    iocs = result.get("iocs", {})
+    if isinstance(iocs, dict):
+        external_urls = [str(item) for item in iocs.get("url", [])]
+        external_domains = [str(item) for item in iocs.get("domain", [])]
+        if external_urls or external_domains:
+            evidence_parts = []
+            if external_urls:
+                evidence_parts.append("urls=" + ", ".join(defang_value(item) for item in external_urls[:8]))
+            if external_domains:
+                evidence_parts.append("domains=" + ", ".join(defang_value(item) for item in external_domains[:8]))
+            findings.append(
+                NormalizedFinding(
+                    finding_id=finding_identifier(source, asset, "mobile-ioc-summary"),
+                    title="External Endpoints Embedded in Mobile Artifact",
+                    severity="info",
+                    category="network",
+                    asset=asset,
+                    source=source,
+                    evidence="; ".join(evidence_parts),
+                    impact="Embedded endpoints are not inherently malicious, but they identify third-party dependencies and outbound communication paths that need ownership review.",
+                    remediation="Confirm endpoint ownership, transport security, and whether each embedded service is required for the shipped mobile build.",
+                )
+            )
+    return dedupe_normalized_findings(findings)
+
+
+def parse_normalized_finding_rows(data: object) -> list[NormalizedFinding]:
+    rows: list[NormalizedFinding] = []
+    if not isinstance(data, list):
+        return rows
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        required = {"finding_id", "title", "severity", "category", "asset", "source", "evidence", "impact", "remediation"}
+        if not required.issubset(item):
+            continue
+        rows.append(
+            NormalizedFinding(
+                finding_id=str(item["finding_id"]),
+                title=str(item["title"]),
+                severity=str(item["severity"]).lower(),
+                category=str(item["category"]),
+                asset=str(item["asset"]),
+                source=str(item["source"]),
+                evidence=str(item["evidence"]),
+                impact=str(item["impact"]),
+                remediation=str(item["remediation"]),
+            )
+        )
+    return rows
+
+
+def workspace_report(workspace: str, title: str | None = None, asset: str | None = None) -> dict[str, object]:
+    workspace_path = Path(workspace).expanduser()
+    if not workspace_path.exists() or not workspace_path.is_dir():
+        raise ValueError(f"Workspace not found: {workspace_path}")
+    findings_dir = workspace_path / "findings"
+    reports_dir = workspace_path / "reports"
+    if not findings_dir.exists():
+        raise ValueError(f"Workspace does not contain a findings directory: {findings_dir}")
+    reports_dir.mkdir(parents=True, exist_ok=True)
+
+    scope = {}
+    scope_path = workspace_path / "scope.json"
+    if scope_path.exists():
+        try:
+            loaded_scope = json.loads(scope_path.read_text(encoding="utf-8"))
+            if isinstance(loaded_scope, dict):
+                scope = loaded_scope
+        except json.JSONDecodeError:
+            scope = {}
+
+    all_findings: list[NormalizedFinding] = []
+    source_files: list[str] = []
+    for finding_path in sorted(findings_dir.glob("*.json")):
+        if finding_path.name == "workspace-report.json":
+            continue
+        try:
+            data = json.loads(finding_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        rows = parse_normalized_finding_rows(data)
+        if not rows:
+            continue
+        all_findings.extend(rows)
+        source_files.append(str(finding_path))
+
+    deduped_findings = dedupe_normalized_findings(all_findings)
+    asset_name = asset or str(scope.get("target") or workspace_path.name)
+    report_title = title or f"Workspace Client Report: {workspace_path.name}"
+    findings_path = findings_dir / "workspace-report.json"
+    markdown_path = reports_dir / "workspace-report.md"
+    summary_path = reports_dir / "workspace-report-summary.json"
+
+    write_json_output(findings_path, [asdict(item) for item in deduped_findings])
+    markdown_path.write_text(build_client_report_markdown(report_title, asset_name, deduped_findings), encoding="utf-8")
+    summary = {
+        "workspace": str(workspace_path),
+        "scope": scope,
+        "source_files": source_files,
+        "asset": asset_name,
+        "title": report_title,
+        "finding_count": len(deduped_findings),
+        "severity_summary": summarize_findings_by_severity([asdict(item) for item in deduped_findings]),
+        "artifacts": {"findings": str(findings_path), "report": str(markdown_path)},
+    }
+    write_json_output(summary_path, summary)
+    print(f"[+] Workspace report artifacts saved: {findings_path}, {markdown_path}, and {summary_path}")
+    return summary
+
+
 def build_recon_workflow_markdown(result: dict[str, object]) -> str:
     target = str(result.get("target", "unknown"))
     workspace = str(result.get("workspace", ""))
@@ -4934,8 +5430,8 @@ def connection_reasons(connection: dict[str, object]) -> list[str]:
         reasons.append("high-risk service listening")
     if state.upper() == "LISTEN" and (local.startswith("*:") or local.startswith("0.0.0.0:") or local.startswith("[::]:")):
         reasons.append("listening on all interfaces")
-    if remote_host and not is_private_address(remote_host):
-        reasons.append("external remote endpoint")
+    if remote_host and not is_private_address(remote_host) and (remote_port in HIGH_RISK_LISTEN_PORTS or remote_port in SUSPICIOUS_PORTS):
+        reasons.append("external endpoint on sensitive port")
     return sorted(set(reasons))
 
 
@@ -4972,16 +5468,24 @@ def format_connection(connection: dict[str, object]) -> str:
     return f"{tag} {color(command.ljust(24), '36')} {state.ljust(13)} {flow}{reason_text}"
 
 
-def connection_watch(iterations: int, interval: float, show_all: bool) -> dict[str, object]:
+def connection_watch(iterations: int, interval: float, show_all: bool, output_dir: str | None = None) -> dict[str, object]:
     if iterations < 1 or iterations > 100:
         raise ValueError("--iterations must be between 1 and 100.")
     if interval < 0.5 or interval > 300:
         raise ValueError("--interval must be between 0.5 and 300 seconds.")
+    hostname = socket.gethostname()
+    paths = build_workflow_paths(
+        name=f"connection-watch-{hostname}",
+        client="Connection Watch",
+        target=hostname,
+        output_dir=output_dir,
+    )
 
     print_section("Live Connection Watch")
     cyber_line("iterations", str(iterations))
     cyber_line("interval", f"{interval}s")
     cyber_line("display", "all connections" if show_all else "alerts only")
+    cyber_line("workspace", str(paths["base"]))
 
     snapshots: list[dict[str, object]] = []
     for index in range(iterations):
@@ -4997,7 +5501,26 @@ def connection_watch(iterations: int, interval: float, show_all: bool) -> dict[s
         snapshots.append({"shown": len(connections), "alerts": len(alerts), "connections": connections})
         if index < iterations - 1:
             time.sleep(interval)
-    return {"iterations": iterations, "interval": interval, "show_all": show_all, "snapshots": snapshots}
+    findings = normalize_connection_findings(asset=hostname, snapshots=snapshots, source="conn-watch")
+    report_artifacts = write_client_report_artifacts(
+        paths,
+        report_slug="connection-watch-report",
+        title="Connection Watch Client Report",
+        asset=hostname,
+        findings=findings,
+    )
+    result = {
+        "asset": hostname,
+        "workspace": str(paths["base"]),
+        "iterations": iterations,
+        "interval": interval,
+        "show_all": show_all,
+        "snapshots": snapshots,
+        "findings": [asdict(item) for item in findings],
+        "report_artifacts": report_artifacts,
+    }
+    write_json_output(paths["scans"] / "connection-watch.json", result)
+    return result
 
 
 def classify_log_line(line: str) -> list[dict[str, str]]:
@@ -5022,7 +5545,7 @@ def print_log_event(line: str, findings: list[dict[str, str]]) -> None:
     print(f"{tag} {line} {color('[' + labels + ']', '1;31' if severity == 'high' else '1;33')}")
 
 
-def log_watch(path: str, lines: int, follow: bool, duration: int, alerts_only: bool) -> dict[str, object]:
+def log_watch(path: str, lines: int, follow: bool, duration: int, alerts_only: bool, output_dir: str | None = None) -> dict[str, object]:
     log_path = Path(path).expanduser()
     if not log_path.exists():
         raise ValueError(f"Log file not found: {log_path}")
@@ -5030,11 +5553,19 @@ def log_watch(path: str, lines: int, follow: bool, duration: int, alerts_only: b
         raise ValueError("--lines must be between 1 and 5000.")
     if duration < 1 or duration > 3600:
         raise ValueError("--duration must be between 1 and 3600 seconds.")
+    workspace_name = f"log-watch-{log_path.stem or 'log'}"
+    paths = build_workflow_paths(
+        name=workspace_name,
+        client="Log Watch",
+        target=str(log_path),
+        output_dir=output_dir,
+    )
 
     print_section("Log Watch")
     cyber_line("file", str(log_path))
     cyber_line("mode", "follow" if follow else "snapshot")
     cyber_line("display", "alerts only" if alerts_only else "all")
+    cyber_line("workspace", str(paths["base"]))
 
     events: list[dict[str, object]] = []
     for line in read_last_lines(log_path, lines):
@@ -5059,7 +5590,24 @@ def log_watch(path: str, lines: int, follow: bool, duration: int, alerts_only: b
                     continue
                 print_log_event(line, findings)
                 events.append({"line": line, "findings": findings})
-    return {"file": str(log_path), "events": events, "alerts": [event for event in events if event["findings"]]}
+    normalized_findings = normalize_log_findings(asset=str(log_path), events=events, source="log-watch")
+    report_artifacts = write_client_report_artifacts(
+        paths,
+        report_slug="log-watch-report",
+        title="Log Watch Client Report",
+        asset=str(log_path),
+        findings=normalized_findings,
+    )
+    result = {
+        "file": str(log_path),
+        "workspace": str(paths["base"]),
+        "events": events,
+        "alerts": [event for event in events if event["findings"]],
+        "findings": [asdict(item) for item in normalized_findings],
+        "report_artifacts": report_artifacts,
+    }
+    write_json_output(paths["scans"] / "log-watch.json", result)
+    return result
 
 
 def classify_ioc(value: str) -> dict[str, object]:
@@ -5252,6 +5800,7 @@ def mobile_artifact_audit(
     max_files: int,
     max_bytes: int,
     include_all_iocs: bool,
+    output_dir: str | None = None,
 ) -> dict[str, object]:
     target = Path(path).expanduser()
     if not target.exists():
@@ -5260,9 +5809,16 @@ def mobile_artifact_audit(
         raise ValueError("--max-files must be between 1 and 5000.")
     if max_bytes < 1024 or max_bytes > 5_000_000:
         raise ValueError("--max-bytes must be between 1024 and 5000000.")
+    paths = build_workflow_paths(
+        name=f"mobile-audit-{target.stem or target.name}",
+        client="Mobile Artifact Audit",
+        target=str(target),
+        output_dir=output_dir,
+    )
 
     print_section("Mobile Artifact Audit")
     cyber_line("path", str(target))
+    cyber_line("workspace", str(paths["base"]))
     print("[i] Defensive static triage only. This does not modify apps or generate payloads.")
 
     permissions: set[str] = set()
@@ -5360,8 +5916,9 @@ def mobile_artifact_audit(
             preview = ", ".join(defang_value(value) for value in values[:10])
             print(f"  - {kind}: {preview}")
 
-    return {
+    result = {
         "path": str(target),
+        "workspace": str(paths["base"]),
         "artifact_type": "apk" if target.is_file() and target.suffix.lower() == ".apk" else "directory" if target.is_dir() else "file",
         "files_scanned": scanned_files,
         "apk_entries_sample": apk_entries[:100],
@@ -5376,6 +5933,17 @@ def mobile_artifact_audit(
             "No backdoors, bypass payloads, exploit code, or persistence code were generated.",
         ],
     }
+    normalized_findings = normalize_mobile_findings(asset=str(target), result=result, source="mobile-artifact-audit")
+    result["findings_normalized"] = [asdict(item) for item in normalized_findings]
+    result["report_artifacts"] = write_client_report_artifacts(
+        paths,
+        report_slug="mobile-artifact-report",
+        title="Mobile Artifact Audit Client Report",
+        asset=str(target),
+        findings=normalized_findings,
+    )
+    write_json_output(paths["scans"] / "mobile-artifact-audit.json", result)
+    return result
 
 
 def awareness_plan(company_name: str, audience: str) -> dict[str, object]:
@@ -6054,6 +6622,82 @@ def check_tools(categories: list[str] | None = None) -> dict[str, list[dict[str,
     return report
 
 
+def workflow_item_installed(name: str) -> bool:
+    if name in PYTHON_PACKAGES:
+        return importlib.util.find_spec(name) is not None
+    return find_tool(name) is not None
+
+
+def workflow_readiness(workflows: list[str] | None = None) -> dict[str, object]:
+    selected = workflows or list(WORKFLOW_REQUIREMENTS)
+    unknown = [name for name in selected if name not in WORKFLOW_REQUIREMENTS]
+    if unknown:
+        raise ValueError(f"Unknown workflow(s): {', '.join(unknown)}")
+
+    print_section("Workflow Readiness")
+    summary = {"ready": 0, "partial": 0, "blocked": 0}
+    results: dict[str, object] = {}
+    for workflow_name in selected:
+        details = WORKFLOW_REQUIREMENTS[workflow_name]
+        required_tools = [item for item in details["required_tools"] if not workflow_item_installed(item)]
+        recommended_tools = [item for item in details["recommended_tools"] if not workflow_item_installed(item)]
+        required_data = [item for item in details["required_data"] if not find_seclists_wordlist(item)]
+        recommended_data = [item for item in details["recommended_data"] if not find_seclists_wordlist(item)]
+        required_env = [item for item in details["required_env"] if not os.environ.get(item)]
+        recommended_env = [item for item in details["recommended_env"] if not os.environ.get(item)]
+        required_python = [item for item in details["required_python"] if importlib.util.find_spec(item) is None]
+        recommended_python = [item for item in details["recommended_python"] if importlib.util.find_spec(item) is None]
+
+        missing_required = required_tools + required_data + required_env + required_python
+        missing_recommended = recommended_tools + recommended_data + recommended_env + recommended_python
+        if missing_required:
+            status = "blocked"
+        elif missing_recommended:
+            status = "partial"
+        else:
+            status = "ready"
+        summary[status] += 1
+
+        print(f"\n[{status.upper()}] {details['title']} ({workflow_name})")
+        if required_tools:
+            print("  required tools missing: " + ", ".join(required_tools))
+        if required_python:
+            print("  required python missing: " + ", ".join(required_python))
+        if required_data:
+            print("  required wordlists missing: " + ", ".join(required_data))
+        if required_env:
+            print("  required env missing: " + ", ".join(required_env))
+        if recommended_tools:
+            print("  recommended tools missing: " + ", ".join(recommended_tools))
+        if recommended_python:
+            print("  recommended python missing: " + ", ".join(recommended_python))
+        if recommended_data:
+            print("  recommended wordlists missing: " + ", ".join(recommended_data))
+        if recommended_env:
+            print("  recommended env missing: " + ", ".join(recommended_env))
+
+        install_hints: dict[str, str] = {}
+        for tool in required_tools + recommended_tools:
+            install_hints[tool] = install_hint_text(tool)
+        results[workflow_name] = {
+            "title": details["title"],
+            "status": status,
+            "missing_required_tools": required_tools,
+            "missing_recommended_tools": recommended_tools,
+            "missing_required_python": required_python,
+            "missing_recommended_python": recommended_python,
+            "missing_required_data": required_data,
+            "missing_recommended_data": recommended_data,
+            "missing_required_env": required_env,
+            "missing_recommended_env": recommended_env,
+            "install_hints": install_hints,
+        }
+
+    print("\n[Summary]")
+    print(f"  ready={summary['ready']} partial={summary['partial']} blocked={summary['blocked']}")
+    return {"summary": summary, "workflows": results}
+
+
 def doctor(categories: list[str] | None = None) -> dict[str, object]:
     selected_categories = categories or ["recon", "scan", "web", "threat", "tooling"]
     print_section("Operator Readiness")
@@ -6099,6 +6743,7 @@ def doctor(categories: list[str] | None = None) -> dict[str, object]:
     print(f"  subdomains: {seclists['subdomains'] or 'missing'}")
 
     tool_report = check_tools(selected_categories)
+    workflow_report = workflow_readiness(["target-brief", "recon-workflow", "web-workflow", "local-posture", "vps-check"])
     missing_tools = sorted(
         item["tool"]
         for items in tool_report.values()
@@ -6112,6 +6757,13 @@ def doctor(categories: list[str] | None = None) -> dict[str, object]:
         findings.append("SecLists was not found; content discovery will require a custom --wordlist.")
     if missing_tools:
         findings.append(f"Missing tools detected: {', '.join(missing_tools[:12])}")
+    blocked_workflows = [
+        name
+        for name, details in workflow_report["workflows"].items()
+        if isinstance(details, dict) and details.get("status") == "blocked"
+    ]
+    if blocked_workflows:
+        findings.append(f"Blocked workflows detected: {', '.join(blocked_workflows)}")
 
     print("\n[Summary]")
     if findings:
@@ -6131,6 +6783,7 @@ def doctor(categories: list[str] | None = None) -> dict[str, object]:
         "python_packages": python_packages,
         "seclists": seclists,
         "tools": tool_report,
+        "workflow_readiness": workflow_report,
         "findings": findings,
     }
 
@@ -6200,6 +6853,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Limit checks to one category. Can be used more than once.",
     )
     doctor_parser.add_argument(
+        "--report",
+        default=argparse.SUPPRESS,
+        help="Write JSON report to this path.",
+    )
+
+    readiness_parser = subparsers.add_parser("workflow-ready", aliases=["ready"], help="Show which workflows are ready, partial, or blocked on this machine.")
+    readiness_parser.add_argument(
+        "--workflow",
+        action="append",
+        choices=sorted(WORKFLOW_REQUIREMENTS),
+        help="Limit output to one workflow. Can be used more than once.",
+    )
+    readiness_parser.add_argument(
         "--report",
         default=argparse.SUPPRESS,
         help="Write JSON report to this path.",
@@ -6601,6 +7267,7 @@ def build_parser() -> argparse.ArgumentParser:
     conn_parser.add_argument("--iterations", type=int, default=1, help="Number of snapshots to collect.")
     conn_parser.add_argument("--interval", type=float, default=3.0, help="Delay between snapshots.")
     conn_parser.add_argument("--show-all", action="store_true", help="Show all connections, not only suspicious rows.")
+    conn_parser.add_argument("--output-dir", help="Workspace directory. Defaults to engagements/connection-watch-<hostname>.")
     conn_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
     log_parser = subparsers.add_parser("log-watch", help="Watch a log file and highlight suspicious security events.")
@@ -6609,6 +7276,7 @@ def build_parser() -> argparse.ArgumentParser:
     log_parser.add_argument("--follow", action="store_true", help="Follow the file for new lines.")
     log_parser.add_argument("--duration", type=int, default=60, help="Follow duration in seconds.")
     log_parser.add_argument("--alerts-only", action="store_true", help="Only print lines with suspicious/security matches.")
+    log_parser.add_argument("--output-dir", help="Workspace directory. Defaults to engagements/log-watch-<logname>.")
     log_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
     ioc_parser = subparsers.add_parser("ioc-triage", help="Classify IPs, domains, URLs, and hashes with local heuristics.")
@@ -6620,7 +7288,14 @@ def build_parser() -> argparse.ArgumentParser:
     mobile_parser.add_argument("--max-files", type=int, default=800, help="Maximum text-like files or APK entries to scan.")
     mobile_parser.add_argument("--max-bytes", type=int, default=250000, help="Maximum bytes sampled per file.")
     mobile_parser.add_argument("--all-iocs", action="store_true", help="Include up to 100 IOCs per type instead of 20.")
+    mobile_parser.add_argument("--output-dir", help="Workspace directory. Defaults to engagements/mobile-audit-<artifact>.")
     mobile_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    report_parser = subparsers.add_parser("report", help="Aggregate normalized findings across one workspace.")
+    report_parser.add_argument("workspace", help="Workspace directory created by a workflow or posture command.")
+    report_parser.add_argument("--title", help="Optional report title override.")
+    report_parser.add_argument("--asset", help="Optional asset label override.")
+    report_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
     wireless_parser = subparsers.add_parser("wireless-info", help="Show read-only wireless/network interface information.")
     add_common_run_options(wireless_parser)
@@ -6753,6 +7428,8 @@ def interactive_menu() -> None:
                 break
             elif choice == "1":
                 doctor()
+            elif choice == "39":
+                workflow_readiness()
             elif choice == "2":
                 check_tools()
             elif choice == "3":
@@ -6897,11 +7574,13 @@ def interactive_menu() -> None:
                 )
             elif choice == "28":
                 show_all = input("Show all connections? [y/N]: ").strip().lower() in {"y", "yes"}
-                connection_watch(iterations=1, interval=3.0, show_all=show_all)
+                output_dir = input("Workspace directory [engagements/connection-watch-<hostname>]: ").strip() or None
+                connection_watch(iterations=1, interval=3.0, show_all=show_all, output_dir=output_dir)
             elif choice == "29":
                 path = input("Log file path: ").strip()
                 alerts_only = input("Alerts only? [Y/n]: ").strip().lower() not in {"n", "no"}
-                log_watch(path, lines=80, follow=False, duration=60, alerts_only=alerts_only)
+                output_dir = input("Workspace directory [engagements/log-watch-<logname>]: ").strip() or None
+                log_watch(path, lines=80, follow=False, duration=60, alerts_only=alerts_only, output_dir=output_dir)
             elif choice == "30":
                 values = shlex.split(input("IOC values: ").strip())
                 ioc_triage(values)
@@ -7006,7 +7685,13 @@ def interactive_menu() -> None:
                 virustotal_lookup(indicator, api_key=api_key, timeout=15.0)
             elif choice == "38":
                 path = input("APK, decompiled APK folder, or repo path: ").strip()
-                mobile_artifact_audit(path, max_files=800, max_bytes=250000, include_all_iocs=False)
+                output_dir = input("Workspace directory [engagements/mobile-audit-<name>]: ").strip() or None
+                mobile_artifact_audit(path, max_files=800, max_bytes=250000, include_all_iocs=False, output_dir=output_dir)
+            elif choice == "50":
+                workspace = input("Workspace path: ").strip()
+                title = input("Report title [workspace default]: ").strip() or None
+                asset = input("Asset label [scope target]: ").strip() or None
+                workspace_report(workspace, title=title, asset=asset)
             elif choice == "40":
                 category = input(f"SecLists category ({', '.join(sorted(SECLISTS_WORDLISTS))}) [all]: ").strip() or None
                 seclists_find(category)
@@ -7093,6 +7778,8 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "tools":
             results = check_tools(args.category)
+        elif args.command in {"workflow-ready", "ready"}:
+            results = workflow_readiness(args.workflow)
         elif args.command == "doctor":
             results = doctor(args.category)
         elif args.command == "install-hints":
@@ -7258,9 +7945,16 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "permission-guide":
             results = permission_guide(args.tool)
         elif args.command == "conn-watch":
-            results = connection_watch(args.iterations, interval=args.interval, show_all=args.show_all)
+            results = connection_watch(args.iterations, interval=args.interval, show_all=args.show_all, output_dir=args.output_dir)
         elif args.command == "log-watch":
-            results = log_watch(args.file, lines=args.lines, follow=args.follow, duration=args.duration, alerts_only=args.alerts_only)
+            results = log_watch(
+                args.file,
+                lines=args.lines,
+                follow=args.follow,
+                duration=args.duration,
+                alerts_only=args.alerts_only,
+                output_dir=args.output_dir,
+            )
         elif args.command == "ioc-triage":
             results = ioc_triage(args.values)
         elif args.command in {"mobile-artifact-audit", "apk-audit"}:
@@ -7269,7 +7963,10 @@ def main(argv: list[str] | None = None) -> int:
                 max_files=args.max_files,
                 max_bytes=args.max_bytes,
                 include_all_iocs=args.all_iocs,
+                output_dir=args.output_dir,
             )
+        elif args.command == "report":
+            results = workspace_report(args.workspace, title=args.title, asset=args.asset)
         elif args.command == "defang":
             results = defang_iocs(args.values, refang=args.refang)
         elif args.command in {"cve-lookup", "cve", "nvd"}:
@@ -7468,6 +8165,8 @@ def main(argv: list[str] | None = None) -> int:
             results = vuln_lookup(args.query, timeout=args.timeout)
         elif args.command in {
             "tools",
+            "workflow-ready",
+            "ready",
             "doctor",
             "install-hints",
             "install-tool",
@@ -7508,6 +8207,7 @@ def main(argv: list[str] | None = None) -> int:
             "ioc-triage",
             "mobile-artifact-audit",
             "apk-audit",
+            "report",
             "wireless-info",
             "vuln-lookup",
             "defang",
