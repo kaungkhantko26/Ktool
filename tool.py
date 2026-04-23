@@ -134,6 +134,7 @@ TOOL_NAME = "KTOOL LabOps"
 TOOL_OWNER = "LabOps user"
 TOOL_TAGLINE = "authorized lab and web assessment console"
 TOOL_COMMAND = "ktool"
+MYANMAR_FLAG = "🇲🇲"
 USER_AGENT = "KTOOL-LabOps/3.0 (+authorized-security-testing)"
 TERMINAL_WIDTH = 78
 SHODAN_API_KEY_ENV = "SHODAN_API_KEY"
@@ -357,7 +358,7 @@ def print_key_value_table(rows: list[tuple[str, str]]) -> None:
 
 
 def print_exit_screen(reason: str = "Session closed", exit_code: int = 0) -> None:
-    title = f"{TOOL_NAME} Console"
+    title = f"{MYANMAR_FLAG} {TOOL_NAME} Console"
     lines = [
         title,
         TOOL_TAGLINE,
@@ -395,6 +396,7 @@ def print_startup_banner() -> None:
 ╚═╝  ╚═╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝ ╚══════╝╚═╝  ╚═╝╚═════╝  ╚═════╝ ╚═╝     ╚══════╝
 """
     print(color(banner.rstrip(), "1;32"))
+    print(color(f"        {MYANMAR_FLAG} {TOOL_NAME}", "1;33"))
     print(color(f"        {TOOL_TAGLINE}", "36"))
     print(color(f"        profile: {TOOL_OWNER}", "36"))
     print(color("        workflow: recon | web | tryhackme | local defense | reports", "90"))
@@ -483,7 +485,7 @@ def print_menu_panel() -> None:
     border = "+" + "-" * width + "+"
     print()
     print(color(border, "32"))
-    print(color("|", "32") + color(f" {TOOL_NAME.upper()} ".center(width), "1;32") + color("|", "32"))
+    print(color("|", "32") + color(f" {MYANMAR_FLAG} {TOOL_NAME.upper()} ".center(width), "1;32") + color("|", "32"))
     print(color("|", "32") + color(" pick a workflow, then follow the prompts ".center(width), "90") + color("|", "32"))
     print(color(border, "32"))
     for title, items in menu_groups:
@@ -4439,7 +4441,7 @@ def print_vps_banner() -> None:
     border = "+" + "-" * width + "+"
     print()
     print(color(border, "1;34"))
-    print(color("|", "1;34") + color(" VPS CONTROL CENTER ".center(width), "1;34") + color("|", "1;34"))
+    print(color("|", "1;34") + color(f" {MYANMAR_FLAG} VPS CONTROL CENTER ".center(width), "1;34") + color("|", "1;34"))
     print(color("|", "1;34") + color(" login | health | storage | usage | pm2 | logs | ls ".center(width), "36") + color("|", "1;34"))
     print(color("|", "1;34") + color(" read-only checks unless you explicitly open ssh login ".center(width), "90") + color("|", "1;34"))
     print(color(border, "1;34"))
