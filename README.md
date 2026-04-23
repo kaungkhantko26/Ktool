@@ -1,228 +1,233 @@
 # KTOOL LabOps
 
-KTOOL LabOps is a Linux-friendly lab and web assessment console for TryHackMe rooms, owned systems, and written-scope security testing.
+KTOOL LabOps is a terminal-first assessment console for authorized work: labs, owned systems, and written-scope security testing. It focuses on recon, web hygiene, defensive triage, lab workflows, and operator productivity without crossing into brute force, phishing, persistence, or exploit automation.
 
-## Quick Start
+## Principles
+
+- Use it only on assets you own, labs you control, or targets with explicit written scope.
+- Treat it as an operator workflow tool, not a magic scanner.
+- Save evidence, notes, and reports as you work.
+
+## Install
+
+Make the launchers executable:
 
 ```bash
 chmod +x tool.py ktool deploy.sh update-ktool.sh install-commands.sh
-ktool
 ```
 
-Install the commands so you can type `ktool` and `update-ktool.sh` from anywhere:
+Install the launcher symlinks:
 
 ```bash
 ./install-commands.sh
 ```
 
-If your shell cannot find `ktool` after installing, add this to `~/.bashrc` or `~/.zshrc`:
+If your shell still cannot find `ktool`, add:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Run command help:
+## First Run
+
+Check the CLI surface:
 
 ```bash
 ktool --help
-ktool version
+ktool --version
+```
+
+Check operator readiness:
+
+```bash
 ktool doctor
+ktool doctor --category web
 ```
 
-Enable automatic GitHub deploys after normal `ktool` runs:
+`doctor` verifies:
+
+- package-manager detection
+- Python package state
+- API key presence for `SHODAN_API_KEY`, `NVD_API_KEY`, and `VIRUSTOTAL_API_KEY`
+- SecLists availability
+- installed external tools by category
+
+## Interactive Menu
+
+Launch the interactive console:
 
 ```bash
-./ktool-auto-deploy.sh install
+ktool
 ```
 
-This runs from your Terminal session, so it works even when macOS blocks background agents from accessing a repo under `Desktop`. For background scheduling on macOS, use:
+Useful shortcuts inside the menu:
+
+- `?` or `help`: show shortcut guidance
+- `q`, `quit`, or `exit`: leave the console
+- `46`: run `doctor`
+- `47`: run the `target-brief` workflow
+
+## Core Workflows
+
+### 1. Target Brief
+
+Use this for a practical first pass on an authorized target. It creates a workspace, runs DNS and port checks, optionally runs WHOIS and web checks, and writes structured output.
 
 ```bash
-./ktool-auto-deploy.sh schedule
-./ktool-auto-deploy.sh schedule 120
+ktool target-brief example.com --yes-i-am-authorized
+ktool brief 10.10.10.10 --skip-web --yes-i-am-authorized
 ```
 
-Manage it:
+The workflow writes:
+
+- workspace folders under `engagements/<name>` by default
+- JSON results under `scans/` and `reports/`
+- a Markdown summary under `notes/target-brief.md`
+
+### 2. Lab Workspace
+
+Create a repeatable workspace before deeper testing:
 
 ```bash
-./ktool-auto-deploy.sh status
-./ktool-auto-deploy.sh unschedule
-./ktool-auto-deploy.sh uninstall
+ktool lab-init acme-external --client "ACME" --target example.com
 ```
 
-Example scoped checks:
+### 3. TryHackMe Workflow
+
+Use the built-in room workflow for first-pass lab setup and safe enumeration:
+
+```bash
+ktool thm --room steel-mountain --target 10.10.10.10 --yes-i-am-authorized
+ktool tryhackme --room steel-mountain --target 10.10.10.10 --content-scan --yes-i-am-authorized
+```
+
+## Common Commands
+
+### Recon
 
 ```bash
 ktool dns example.com --yes-i-am-authorized
+ktool whois example.com --yes-i-am-authorized
+ktool ports example.com --ports common --yes-i-am-authorized
+ktool subs example.com --yes-i-am-authorized
+ktool nmap example.com --top-ports 1000 --yes-i-am-authorized
+```
+
+### Web
+
+```bash
+ktool headers https://example.com --yes-i-am-authorized
+ktool dirs https://example.com --yes-i-am-authorized
+ktool web https://example.com --yes-i-am-authorized
 ktool web-vuln-search https://example.com --yes-i-am-authorized
-ktool web-vuln-search https://example.com --yes-i-am-authorized --nikto --nikto-timeout 900
-ktool ssl-cert-check https://example.com --yes-i-am-authorized
-ktool http-methods https://example.com --yes-i-am-authorized
-ktool robots-check https://example.com --yes-i-am-authorized
-ktool backup-file-check https://example.com --yes-i-am-authorized
-ktool redirect-check http://example.com --yes-i-am-authorized
-ktool cookie-audit https://example.com --yes-i-am-authorized
-ktool link-check "https://example.com/login?token=test"
-ktool link-check "https://bit.ly/example" --fetch
-ktool ports 127.0.0.1 --ports 22,80,443 --yes-i-am-authorized
+ktool content-discovery https://example.com --tool gobuster --wordlist-kind directory-small --yes-i-am-authorized
+```
+
+### Threat / Defensive Triage
+
+```bash
+ktool ioc-triage 8.8.8.8 https://secure-login-account.top d41d8cd98f00b204e9800998ecf8427e
+ktool defang https://secure-login-account.top admin@example.com
+ktool threat-site-triage https://secure-login-account.top --fetch-body --output-markdown reports/threat-site.md --yes-i-am-authorized
+ktool vt 8.8.8.8
+ktool cve-lookup CVE-2024-3094
+```
+
+### Local / Network
+
+```bash
 ktool lan-scan 192.168.1.0/24 --yes-i-am-authorized
-ktool lan-scan 192.168.1.0/24 --resolve-names --install-missing --yes-i-am-authorized
-ktool scapy-sniff --interface en0 --duration 20 --count 100 --filter "tcp port 443" --install-missing --yes-i-am-authorized
+ktool capture en0 --duration 20 --count 100 --output capture.pcap --yes-i-am-authorized
 ktool scapy-sniff --interface en0 --traffic dns --duration 20 --count 100 --yes-i-am-authorized
-ktool scapy-sniff --interface en0 --traffic http-dns --suspicious-only --yes-i-am-authorized
-ktool sudo-su --dry-run -- scapy-sniff --interface en0 --duration 20 --count 100 --yes-i-am-authorized
-ktool sudo-su -- capture en0 --duration 20 --count 100 --output capture.pcap --yes-i-am-authorized
-ktool capture en0 --duration 20 --count 100 --output capture.pcap --install-missing --yes-i-am-authorized
-ktool ncat-chat listen --port 4444 --install-missing --yes-i-am-authorized
-ktool ncat-chat send --host 192.168.1.50 --port 4444 --message "hello from ktool" --yes-i-am-authorized
+ktool conn-watch --iterations 5 --interval 3
+ktool log-watch /var/log/auth.log --alerts-only
+```
+
+### VPS Operations
+
+```bash
+ktool vps-check
+ktool vps-check --only storage --only usage
+ktool vps-logs --host root@203.0.113.10 --dry-run
+```
+
+### Utilities
+
+```bash
 ktool password-check
 ktool password-generate --length 24 --count 5 --no-ambiguous
 ktool admin-password --username admin --length 28 --output secrets/admin-password.env
-ktool conn-watch --show-all
-ktool conn-watch --iterations 5 --interval 3
-ktool log-watch /var/log/auth.log --alerts-only
-ktool ioc-triage 8.8.8.8 https://secure-login-account.top d41d8cd98f00b204e9800998ecf8427e
-ktool live-workflow example.com --url https://example.com --ports common --yes-i-am-authorized
-ktool defang https://secure-login-account.top admin@example.com
-ktool defang --refang hxxps://secure-login-account[.]top
-ktool threat-site-triage https://secure-login-account.top --fetch-body --output-markdown reports/threat-site.md --yes-i-am-authorized
-ktool shodan 8.8.8.8 --yes-i-am-authorized
-ktool shodan example.com --minify --yes-i-am-authorized
-ktool cve-lookup CVE-2024-3094
-ktool cve-lookup "nginx 1.18" --severity HIGH --limit 5
-ktool virustotal 8.8.8.8
-ktool vt d41d8cd98f00b204e9800998ecf8427e
-ktool mobile-artifact-audit ./sample.apk --report reports/mobile-audit.json
-ktool apk-audit ./decompiled-apk --all-iocs
-ktool hatch --dry-run -- --version
-ktool hatch --install-missing -- --version
-ktool hatch -- env show
+ktool hatch -- --version
 ktool permission-guide
-ktool permission-guide scapy-sniff
-ktool email-check admin@example.com --yes-i-am-authorized
-ktool email-domain example.com --dkim-selector default --yes-i-am-authorized
-ktool smtp-check mail.example.com --port 587 --starttls --yes-i-am-authorized
-ktool wifi-check
-ktool wifi-check --interface wlan0 --scan
-ktool wifi-scan
-ktool wifi-device-users
-ktool wifi-device-users --resolve-names
-ktool wifi-device-users --active --yes-i-am-authorized
-ktool router-checklist
-ktool dns-leak-check
-ktool lan-device-list
-ktool firewall-check
-ktool service-audit
-ktool vps-ui
-ktool vps-login --host root@203.0.113.10
-ktool vps-check
-ktool vps-check --only storage --only usage
-ktool vps-storage --host root@203.0.113.10 --dry-run
-ktool vps-usage --host root@203.0.113.10 --dry-run
-ktool vps-pm2 --host root@203.0.113.10 --dry-run
-ktool vps-ls --host root@203.0.113.10 --path /var/www --dry-run
-ktool vps-services --host root@203.0.113.10 --service nginx --service pm2 --dry-run
-ktool vps-logs --host root@203.0.113.10 --dry-run
-ktool vps-docker --host root@203.0.113.10 --dry-run
-ktool vps-check --path /var/www --path /root --service nginx --service pm2
-ktool vps-check --host root@203.0.113.10 --path /var/www --service nginx --logs --dry-run
-ktool vps-check --host root@203.0.113.10 --identity ~/.ssh/id_ed25519 --docker --logs --report reports/vps-health.json
-ktool update-check
-ktool ssh-audit-local
-ktool iphone-health-guide
-ktool iphone-check --ip 192.168.1.23 --mdns
-ktool iphone-check --usb
-ktool iphone-usb-info
-ktool privacy-methods
-ktool ip-privacy-check
-ktool ip-privacy-check --public
-ktool myanmar-plate-check "YGN 1A-2345"
-ktool myanmar-vehicle-checklist
-ktool setoolkit-info
 ```
 
-Pentester workflow:
+## Reports
+
+Most commands support `--report`:
 
 ```bash
-ktool scope add --target example.com --note "authorized target"
-ktool scope check --target https://example.com
-ktool engagement-init --client "Client Name" --target example.com
-ktool evidence-init example.com
-ktool evidence-snapshot --output-dir engagements/example.com/evidence -- date
-ktool checklist web
-ktool finding-new --title "Missing DMARC" --severity medium --asset example.com --evidence "No DMARC record" --impact "Email spoofing risk" --remediation "Publish DMARC and move toward enforcement"
-ktool report-init --client "Client Name" --target example.com --output engagements/example.com/reports/report.md
-ktool report-export --client "Client Name" --target example.com --findings-dir findings --output reports/ktool-report.md
-ktool export-html-report reports/ktool-report.json --output reports/ktool-report.html
-ktool recon-workflow example.com --yes-i-am-authorized
-ktool web-workflow https://example.com --yes-i-am-authorized
+ktool web https://example.com --yes-i-am-authorized --report reports/web.json
 ```
 
-External tool wrappers:
+Report behavior:
+
+- JSON output is normalized for nested objects and dataclasses
+- parent directories are created automatically
+- sensitive outputs such as generated passwords are written with mode `0600`
+
+## External Tool Wrappers
+
+KTOOL can drive installed external tools such as:
+
+- `gobuster`
+- `ffuf`
+- `dirb`
+- `whatweb`
+- `wafw00f`
+- `nikto`
+- `dnsrecon`
+- `amass`
+- `sslscan`
+- `testssl.sh`
+
+Find supporting wordlists and wrappers:
 
 ```bash
-ktool external-examples
 ktool seclists-find
-ktool seclists-find --category directory-small
-ktool install-hints hatch
-ktool install-hints gobuster
-ktool install-hints dirb
+ktool external-examples
 ktool install-hints seclists
-ktool install-tool ncat
-ktool install-tool ncat --execute
 ktool install-tools --category web --manager apt
-ktool install-tools --category web --manager apt --execute
-ktool lab-init tryhackme-room --client TryHackMe --target 10.10.10.10
-ktool thm --room tryhackme-room --target 10.10.10.10 --dry-run --yes-i-am-authorized
-ktool tryhackme --room tryhackme-room --target 10.10.10.10 --content-scan --yes-i-am-authorized
-ktool tryhackme --room tryhackme-room --target 10.10.10.10 --content-scan --content-tool dirb --yes-i-am-authorized
-ktool content-discovery https://example.com --tool gobuster --wordlist-kind directory-small --yes-i-am-authorized
-ktool gobuster https://example.com --wordlist /usr/share/seclists/Discovery/Web-Content/common.txt --yes-i-am-authorized
-ktool ffuf https://example.com --wordlist /usr/share/seclists/Discovery/Web-Content/common.txt --rate 50 --yes-i-am-authorized
-ktool dirb https://example.com --wordlist /usr/share/seclists/Discovery/Web-Content/common.txt --yes-i-am-authorized
-ktool fingerprint https://example.com --tools whatweb,wafw00f,httpx --yes-i-am-authorized
-ktool tls-audit https://example.com --tools testssl.sh,sslscan --yes-i-am-authorized
-ktool dns-enum example.com --tools dnsrecon,subfinder,amass --yes-i-am-authorized
-ktool url-discovery https://example.com --tools waybackurls,gau,katana --yes-i-am-authorized
-ktool web-scan https://example.com --tool nuclei --rate 20 --yes-i-am-authorized
-ktool js-audit https://example.com --browser --yes-i-am-authorized
-ktool js-audit https://example.com --tools retire,semgrep,trufflehog --output js-downloads --yes-i-am-authorized
 ```
 
-The external wrappers run the real Linux tools when they are installed. Use `install-tools` for package-manager tools and `install-hints` for tools that need Go, Python, npm, GitHub releases, or manual setup.
-For the single-file CLI commands in `tool.py`, `--install-missing` can install supported dependencies such as `nmap`, `ncat`, `tcpdump`, `whois`, or Python `scapy` with the detected package manager.
-KTOOL LabOps does not bypass operating-system permissions. If packet capture or raw socket tools return `Operation not permitted`, use `ktool permission-guide` for approved fixes such as sudo, Linux capabilities, or macOS packet-capture setup.
-Use `ktool sudo-su -- <command args>` to relaunch one LabOps command through the operating system's approved sudo policy, or `ktool sudo-su` to open the interactive menu as root.
-Password commands use Python `secrets`; sensitive reports and admin password output files are written with mode `0600`.
-API-backed intelligence commands use environment variables by default: `SHODAN_API_KEY`, `NVD_API_KEY`, and `VIRUSTOTAL_API_KEY`. You can also pass `--api-key` per command.
+## Permissions
 
-Use KTOOL LabOps only on systems you own, lab environments, or targets where you have explicit written permission.
+KTOOL does not bypass operating-system restrictions. If raw sockets or packet capture fail with permission errors, use:
 
-## Deploy Updates
+```bash
+ktool permission-guide
+ktool sudo-su -- capture en0 --duration 20 --count 100 --output capture.pcap --yes-i-am-authorized
+```
 
-Push local KTOOL LabOps changes to GitHub:
+## Deploying Updates
+
+Commit and push local changes:
 
 ```bash
 ./deploy.sh
+./deploy.sh "Update operator workflows"
 ```
 
-Use a custom commit message:
-
-```bash
-./deploy.sh "Update Ktool features"
-```
-
-Pull the latest KTOOL LabOps from GitHub:
+Pull the latest version:
 
 ```bash
 update-ktool.sh
 ```
 
-If you copied the launcher scripts instead of installing symlinks, set the repo path:
+Optional auto-deploy helper:
 
 ```bash
-export KTOOL_HOME="$HOME/Ktool"
+./ktool-auto-deploy.sh install
+./ktool-auto-deploy.sh status
+./ktool-auto-deploy.sh unschedule
+./ktool-auto-deploy.sh uninstall
 ```
-
-By default, starting `ktool` does not run Git commands. Use `update-ktool.sh` when you want to pull updates, and `./deploy.sh` only when you want to commit and push local changes.
-If auto-deploy is enabled, `ktool-auto-deploy.sh` runs `./deploy.sh` after normal `ktool` runs. Background scheduling is optional.

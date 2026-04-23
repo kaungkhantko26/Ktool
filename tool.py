@@ -132,6 +132,7 @@ SECURITY_HEADERS = {
 }
 
 TOOL_NAME = "KTOOL LabOps"
+TOOL_VERSION = "3.1.0"
 TOOL_OWNER = "LabOps user"
 TOOL_TAGLINE = "authorized lab and web assessment console"
 TOOL_COMMAND = "ktool"
@@ -141,6 +142,7 @@ TERMINAL_WIDTH = 78
 SHODAN_API_KEY_ENV = "SHODAN_API_KEY"
 NVD_API_KEY_ENV = "NVD_API_KEY"
 VIRUSTOTAL_API_KEY_ENV = "VIRUSTOTAL_API_KEY"
+HTTP_RETRY_ATTEMPTS = 2
 
 PACKAGE_NAMES = {
     "hatch": {"brew": "hatch"},
@@ -400,7 +402,8 @@ def print_startup_banner() -> None:
     print(color(f"        {MYANMAR_FLAG} {TOOL_NAME}", "1;33"))
     print(color(f"        {TOOL_TAGLINE}", "36"))
     print(color(f"        profile: {TOOL_OWNER}", "36"))
-    print(color("        workflow: recon | web | tryhackme | local defense | reports", "90"))
+    print(color(f"        version: {TOOL_VERSION}", "36"))
+    print(color("        workflow: doctor | target-brief | recon | web | tryhackme | local defense", "90"))
     print(color("        active checks require explicit permission or a lab target", "90"))
 
 
@@ -410,7 +413,8 @@ def print_menu_panel() -> None:
             "START",
             [
                 ("1", "Skill Roadmap"),
-                ("2", "Tool Readiness Check"),
+                ("2", "Tool Availability Check"),
+                ("46", "Operator Doctor"),
                 ("25", "Install Hints"),
                 ("26", "Install Tool"),
                 ("39", "Workflow Examples"),
@@ -444,6 +448,7 @@ def print_menu_panel() -> None:
             "LABS",
             [
                 ("31", "Live Target Workflow"),
+                ("47", "Target Brief Workflow"),
                 ("42", "Lab Workspace Setup"),
                 ("43", "TryHackMe Room Workflow"),
             ],
@@ -482,12 +487,13 @@ def print_menu_panel() -> None:
             ],
         ),
     ]
-    width = 62
+    width = 70
     border = "+" + "-" * width + "+"
     print()
     print(color(border, "32"))
     print(color("|", "32") + color(f" {MYANMAR_FLAG} {TOOL_NAME.upper()} ".center(width), "1;32") + color("|", "32"))
     print(color("|", "32") + color(" pick a workflow, then follow the prompts ".center(width), "90") + color("|", "32"))
+    print(color("|", "32") + color(" shortcuts: ? help | q quit | 45 exit ".center(width), "90") + color("|", "32"))
     print(color(border, "32"))
     for title, items in menu_groups:
         print(color("|", "32") + color(f" {title} ".ljust(width), "1;36") + color("|", "32"))
@@ -930,6 +936,32 @@ def load_words(path: str | None, defaults: list[str]) -> list[str]:
     return words
 
 
+def json_ready(value: object) -> object:
+    if hasattr(value, "__dataclass_fields__"):
+        return asdict(value)
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, dict):
+        return {str(key): json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [json_ready(item) for item in value]
+    return value
+
+
+def write_json_output(path: str | Path, payload: object) -> Path:
+    output_path = Path(path).expanduser()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(json_ready(payload), indent=2) + "\n", encoding="utf-8")
+    return output_path
+
+
+def should_retry_url_error(error: URLError) -> bool:
+    reason = getattr(error, "reason", error)
+    return isinstance(reason, (TimeoutError, socket.timeout, ConnectionResetError, ssl.SSLError, OSError))
+
+
 def socket_family(target: str) -> socket.AddressFamily:
     try:
         ip = ipaddress.ip_address(target)
@@ -1070,16 +1102,21 @@ def whois_lookup(
 def http_request(url: str, method: str = "GET", timeout: float = 5.0) -> tuple[int, dict[str, str], bytes]:
     context = ssl.create_default_context()
     request = Request(url, method=method, headers={"User-Agent": USER_AGENT})
-    try:
-        with urlopen(request, timeout=timeout, context=context) as response:
-            body = response.read(1024 * 128)
-            return response.status, dict(response.headers.items()), body
-    except HTTPError as error:
-        body = error.read(1024 * 128)
-        return error.code, dict(error.headers.items()), body
-    except URLError as error:
-        reason = getattr(error, "reason", error)
-        raise ConnectionError(str(reason)) from error
+    for attempt in range(HTTP_RETRY_ATTEMPTS):
+        try:
+            with urlopen(request, timeout=timeout, context=context) as response:
+                body = response.read(1024 * 128)
+                return response.status, dict(response.headers.items()), body
+        except HTTPError as error:
+            body = error.read(1024 * 128)
+            return error.code, dict(error.headers.items()), body
+        except URLError as error:
+            if attempt + 1 < HTTP_RETRY_ATTEMPTS and should_retry_url_error(error):
+                time.sleep(0.25 * (attempt + 1))
+                continue
+            reason = getattr(error, "reason", error)
+            raise ConnectionError(str(reason)) from error
+    raise ConnectionError(f"HTTP request failed for {url}")
 
 
 def api_key_value(provided: str | None, env_name: str, service_name: str) -> str:
@@ -1102,25 +1139,30 @@ def http_json_request(
         request_headers.update(headers)
 
     request = Request(url, headers=request_headers)
-    try:
-        with urlopen(request, timeout=timeout, context=ssl.create_default_context()) as response:
-            body = response.read(1024 * 1024)
-            return json.loads(body.decode("utf-8", errors="replace"))
-    except HTTPError as error:
-        body = error.read(64 * 1024).decode("utf-8", errors="replace")
-        message = body
+    for attempt in range(HTTP_RETRY_ATTEMPTS):
         try:
-            parsed = json.loads(body)
-            if isinstance(parsed, dict):
-                message = str(parsed.get("message") or parsed.get("error") or parsed)
-        except json.JSONDecodeError:
-            pass
-        raise ConnectionError(f"HTTP {error.code}: {message}") from error
-    except URLError as error:
-        reason = getattr(error, "reason", error)
-        raise ConnectionError(str(reason)) from error
-    except json.JSONDecodeError as error:
-        raise ConnectionError(f"API response was not valid JSON: {error}") from error
+            with urlopen(request, timeout=timeout, context=ssl.create_default_context()) as response:
+                body = response.read(1024 * 1024)
+                return json.loads(body.decode("utf-8", errors="replace"))
+        except HTTPError as error:
+            body = error.read(64 * 1024).decode("utf-8", errors="replace")
+            message = body
+            try:
+                parsed = json.loads(body)
+                if isinstance(parsed, dict):
+                    message = str(parsed.get("message") or parsed.get("error") or parsed)
+            except json.JSONDecodeError:
+                pass
+            raise ConnectionError(f"HTTP {error.code}: {message}") from error
+        except URLError as error:
+            if attempt + 1 < HTTP_RETRY_ATTEMPTS and should_retry_url_error(error):
+                time.sleep(0.25 * (attempt + 1))
+                continue
+            reason = getattr(error, "reason", error)
+            raise ConnectionError(str(reason)) from error
+        except json.JSONDecodeError as error:
+            raise ConnectionError(f"API response was not valid JSON: {error}") from error
+    raise ConnectionError(f"API request failed for {url}")
 
 
 def first_public_ip(target: str) -> tuple[str, str | None]:
@@ -2506,6 +2548,155 @@ def lab_init(name: str, client: str, target: str, output_dir: str | None) -> dic
     print_section("Lab Workspace")
     print_key_value_table([(key, str(path)) for key, path in paths.items()])
     return {"workspace": str(base_dir), "scope": scope, "paths": {key: str(path) for key, path in paths.items()}}
+
+
+def infer_web_url(target: str, ports: list[PortResult]) -> str | None:
+    open_ports = {item.port for item in ports}
+    for port in (443, 8443, 9443):
+        if port in open_ports:
+            suffix = "" if port == 443 else f":{port}"
+            return f"https://{target}{suffix}"
+    for port in (80, 8080, 8000):
+        if port in open_ports:
+            suffix = "" if port == 80 else f":{port}"
+            return f"http://{target}{suffix}"
+    return None
+
+
+def build_target_brief_markdown(result: dict[str, object]) -> str:
+    target = str(result.get("target", "unknown"))
+    workspace = str(result.get("workspace", ""))
+    url = result.get("url")
+    ports = result.get("ports", [])
+    open_ports = ", ".join(f"{item['port']}/tcp" for item in ports[:12]) if isinstance(ports, list) and ports else "none detected"
+    dns = result.get("dns", {})
+    addresses = dns.get("addresses", []) if isinstance(dns, dict) else []
+    web = result.get("web", {}) if isinstance(result.get("web"), dict) else {}
+    header_result = web.get("headers", {})
+    missing_headers = header_result.get("missing_security_headers", []) if isinstance(header_result, dict) else []
+    paths = web.get("paths", []) if isinstance(web.get("paths"), list) else []
+    accessible_paths = [item["url"] for item in paths if isinstance(item, dict) and isinstance(item.get("status"), int) and item["status"] < 400][:8]
+
+    lines = [
+        "# Target Brief",
+        "",
+        f"- Target: {target}",
+        f"- Workspace: {workspace}",
+        f"- Generated UTC: {datetime.now(timezone.utc).isoformat()}",
+        f"- Web URL: {url or 'not inferred'}",
+        f"- Resolved addresses: {', '.join(addresses) if addresses else 'none'}",
+        f"- Open ports: {open_ports}",
+        "",
+        "## High-Value Notes",
+    ]
+
+    if missing_headers:
+        lines.append(f"- Missing security headers: {', '.join(missing_headers)}")
+    if accessible_paths:
+        lines.append("- Accessible common paths:")
+        for path in accessible_paths:
+            lines.append(f"  - {path}")
+    if not missing_headers and not accessible_paths:
+        lines.append("- No immediate web hygiene findings were identified in the first-pass sample.")
+
+    lines.extend(
+        [
+            "",
+            "## Suggested Next Steps",
+            f"- Run `ktool nmap {shlex.quote(target)} --top-ports 1000 --yes-i-am-authorized` for deeper service coverage.",
+        ]
+    )
+    if url:
+        lines.append(f"- Run `ktool web {shlex.quote(str(url))} --yes-i-am-authorized` for a focused web hygiene baseline.")
+        lines.append(f"- Run `ktool content-discovery {shlex.quote(str(url))} --wordlist-kind directory-small --yes-i-am-authorized` if web scope is approved.")
+    lines.append("- Save screenshots, raw output, and operator notes under this workspace before moving to deeper validation.")
+    return "\n".join(lines) + "\n"
+
+
+def target_brief(
+    target: str,
+    name: str | None,
+    url: str | None,
+    output_dir: str | None,
+    ports: str,
+    timeout: float,
+    skip_whois: bool,
+    skip_web: bool,
+    install_missing: bool,
+    package_manager: str | None,
+) -> dict[str, object]:
+    target = validate_host(target)
+    workspace = lab_init(
+        name=name or target,
+        client="Authorized Assessment",
+        target=target,
+        output_dir=output_dir,
+    )
+    paths = {key: Path(value) for key, value in workspace["paths"].items()}
+    selected_ports = parse_ports(ports)
+
+    print_section("Target Brief")
+    cyber_line("target", target)
+    cyber_line("workspace", str(paths["base"]))
+
+    results: dict[str, object] = {
+        "target": target,
+        "workspace": str(paths["base"]),
+        "url": None,
+        "dns": {},
+        "whois": None,
+        "ports": [],
+        "web": None,
+    }
+
+    results["dns"] = resolve_dns(target)
+    write_json_output(paths["scans"] / "dns.json", results["dns"])
+
+    if skip_whois:
+        results["whois"] = {"skipped": True}
+    else:
+        try:
+            results["whois"] = whois_lookup(
+                target,
+                timeout=max(timeout * 20, 15.0),
+                install_missing=install_missing,
+                package_manager=package_manager,
+            )
+        except (ValueError, OSError, ConnectionError, TimeoutError) as error:
+            results["whois"] = {"error": str(error)}
+            print(f"[i] WHOIS skipped/failed: {error}")
+    write_json_output(paths["scans"] / "whois.json", results["whois"])
+
+    port_results = port_scanner(target, selected_ports, timeout=timeout, workers=32, delay=0.0)
+    results["ports"] = [asdict(item) for item in port_results]
+    write_json_output(paths["scans"] / "ports.json", results["ports"])
+
+    inferred_url = normalize_url(url) if url else infer_web_url(target, port_results)
+    results["url"] = inferred_url
+    if skip_web:
+        results["web"] = {"skipped": True}
+    elif inferred_url:
+        header_result = header_analyzer(inferred_url, timeout=max(timeout * 8, 5.0))
+        path_results = directory_scanner(
+            inferred_url,
+            paths=DEFAULT_PATHS,
+            timeout=max(timeout * 8, 5.0),
+            delay=0.1,
+            show_all=False,
+        )
+        results["web"] = {
+            "headers": asdict(header_result),
+            "paths": [asdict(item) for item in path_results],
+        }
+    else:
+        results["web"] = {"skipped": True, "reason": "No common web port was open and no URL was supplied."}
+
+    write_json_output(paths["scans"] / "web.json", results["web"])
+    summary_path = paths["notes"] / "target-brief.md"
+    summary_path.write_text(build_target_brief_markdown(results), encoding="utf-8")
+    write_json_output(paths["reports"] / "target-brief.json", results)
+    print(f"\n[+] Target brief saved to {summary_path}")
+    return results
 
 
 def is_tryhackme_lab_target(target: str) -> bool:
@@ -4835,6 +5026,87 @@ def check_tools(categories: list[str] | None = None) -> dict[str, list[dict[str,
     return report
 
 
+def doctor(categories: list[str] | None = None) -> dict[str, object]:
+    selected_categories = categories or ["recon", "scan", "web", "threat", "tooling"]
+    print_section("Operator Readiness")
+    print_key_value_table(
+        [
+            ("version", TOOL_VERSION),
+            ("python", sys.version.split()[0]),
+            ("executable", sys.executable),
+            ("platform", platform.platform()),
+            ("cwd", os.getcwd()),
+            ("package manager", detect_package_manager() or "not detected"),
+        ]
+    )
+
+    api_keys = {
+        SHODAN_API_KEY_ENV: bool(os.environ.get(SHODAN_API_KEY_ENV)),
+        NVD_API_KEY_ENV: bool(os.environ.get(NVD_API_KEY_ENV)),
+        VIRUSTOTAL_API_KEY_ENV: bool(os.environ.get(VIRUSTOTAL_API_KEY_ENV)),
+    }
+    print("\n[API keys]")
+    for env_name, present in api_keys.items():
+        status = "set" if present else "missing"
+        print(f"  [{status}] {env_name}")
+
+    python_packages = {
+        module: importlib.util.find_spec(module) is not None
+        for module in sorted(PYTHON_PACKAGES)
+    }
+    if python_packages:
+        print("\n[Python packages]")
+        for module, present in python_packages.items():
+            status = "installed" if present else "missing"
+            print(f"  [{status}] {module}")
+
+    seclists = {
+        "roots": [str(root) for root in find_seclists_roots()],
+        "directory-small": str(find_seclists_wordlist("directory-small") or ""),
+        "subdomains": str(find_seclists_wordlist("subdomains") or ""),
+    }
+    print("\n[SecLists]")
+    print(f"  roots: {', '.join(seclists['roots']) if seclists['roots'] else 'not found'}")
+    print(f"  directory-small: {seclists['directory-small'] or 'missing'}")
+    print(f"  subdomains: {seclists['subdomains'] or 'missing'}")
+
+    tool_report = check_tools(selected_categories)
+    missing_tools = sorted(
+        item["tool"]
+        for items in tool_report.values()
+        for item in items
+        if not item["installed"]
+    )
+    findings = []
+    if not detect_package_manager():
+        findings.append("No supported package manager detected for auto-install workflows.")
+    if not seclists["roots"]:
+        findings.append("SecLists was not found; content discovery will require a custom --wordlist.")
+    if missing_tools:
+        findings.append(f"Missing tools detected: {', '.join(missing_tools[:12])}")
+
+    print("\n[Summary]")
+    if findings:
+        for finding in findings:
+            print(f"  - {finding}")
+    else:
+        print("  - Core operator readiness checks passed.")
+
+    return {
+        "version": TOOL_VERSION,
+        "python": sys.version,
+        "executable": sys.executable,
+        "platform": platform.platform(),
+        "cwd": os.getcwd(),
+        "package_manager": detect_package_manager(),
+        "api_keys": api_keys,
+        "python_packages": python_packages,
+        "seclists": seclists,
+        "tools": tool_report,
+        "findings": findings,
+    }
+
+
 def print_roadmap(category: str | None = None) -> dict[str, object]:
     selected_keys = [category] if category else list(TOOL_CATEGORIES)
     unknown = [key for key in selected_keys if key not in TOOL_CATEGORIES]
@@ -4869,29 +5141,25 @@ def print_roadmap(category: str | None = None) -> dict[str, object]:
 def save_report(path: str | None, command: str, data: Iterable[object] | object) -> None:
     if not path:
         return
-
-    if isinstance(data, list):
-        payload_data = [asdict(item) if hasattr(item, "__dataclass_fields__") else item for item in data]
-    elif hasattr(data, "__dataclass_fields__"):
-        payload_data = asdict(data)
-    else:
-        payload_data = data
+    payload_data = json_ready(data)
 
     payload = {
         "tool": TOOL_NAME,
+        "version": TOOL_VERSION,
         "owner": TOOL_OWNER,
         "tagline": TOOL_TAGLINE,
         "command": command,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "data": payload_data,
     }
-    report_path = Path(path)
+    report_path = Path(path).expanduser()
     report_content = json.dumps(payload, indent=2)
     if command in SENSITIVE_REPORT_COMMANDS:
         saved_path = write_secret_file(str(report_path), report_content + "\n")
         print(f"\n[+] Sensitive report saved with mode 0600 to {saved_path}")
     else:
-        report_path.write_text(report_content, encoding="utf-8")
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(report_content + "\n", encoding="utf-8")
         print(f"\n[+] Report saved to {report_path}")
 
 
@@ -4899,6 +5167,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=f"{TOOL_NAME}: {TOOL_TAGLINE}.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"{TOOL_COMMAND} {TOOL_VERSION}",
     )
     parser.add_argument(
         "--yes-i-am-authorized",
@@ -4929,6 +5202,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Limit checks to one category. Can be used more than once.",
     )
     tools_parser.add_argument(
+        "--report",
+        default=argparse.SUPPRESS,
+        help="Write JSON report to this path.",
+    )
+
+    doctor_parser = subparsers.add_parser("doctor", help="Check operator readiness, dependencies, API keys, and wordlists.")
+    doctor_parser.add_argument(
+        "--category",
+        action="append",
+        choices=sorted(TOOL_CATEGORIES),
+        help="Limit checks to one category. Can be used more than once.",
+    )
+    doctor_parser.add_argument(
         "--report",
         default=argparse.SUPPRESS,
         help="Write JSON report to this path.",
@@ -5138,6 +5424,22 @@ def build_parser() -> argparse.ArgumentParser:
     lab_parser.add_argument("--target", required=True, help="Primary authorized target.")
     lab_parser.add_argument("--output-dir", help="Workspace directory. Defaults to engagements/<name>.")
     lab_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    brief_parser = subparsers.add_parser(
+        "target-brief",
+        aliases=["brief"],
+        help="Create a workspace and run an authorized first-pass target brief.",
+    )
+    add_common_run_options(brief_parser)
+    add_install_options(brief_parser)
+    brief_parser.add_argument("target", help="Authorized hostname or IP address.")
+    brief_parser.add_argument("--name", help="Engagement name. Defaults to the target value.")
+    brief_parser.add_argument("--url", help="Optional URL. If omitted, infer from common open web ports.")
+    brief_parser.add_argument("--output-dir", help="Workspace directory. Defaults to engagements/<name>.")
+    brief_parser.add_argument("--ports", default="common", help="Port list, range, or 'common'.")
+    brief_parser.add_argument("--timeout", type=float, default=0.7, help="Socket timeout in seconds for first-pass checks.")
+    brief_parser.add_argument("--skip-whois", action="store_true", help="Skip WHOIS lookup.")
+    brief_parser.add_argument("--skip-web", action="store_true", help="Skip web header/path checks.")
 
     thm_parser = subparsers.add_parser(
         "tryhackme",
@@ -5428,13 +5730,20 @@ def interactive_menu() -> None:
     while True:
         print_menu_panel()
 
-        choice = input(color("ktool> ", "1;32")).strip()
+        choice = input(color("ktool> ", "1;32")).strip().lower()
 
         try:
-            if choice == "1":
+            if choice in {"?", "h", "help"}:
+                print("\n[i] Enter a menu number, or use q to exit the console.")
+            elif choice in {"q", "quit", "exit", "45"}:
+                print_exit_screen("Session closed from the interactive menu.", 0)
+                break
+            elif choice == "1":
                 print_roadmap()
             elif choice == "2":
                 check_tools()
+            elif choice == "46":
+                doctor()
             elif choice == "3":
                 domain = input("Domain/host: ").strip()
                 resolve_dns(domain)
@@ -5589,6 +5898,26 @@ def interactive_menu() -> None:
                 url = input("Optional URL [blank]: ").strip() or None
                 ports = input("Ports [common]: ").strip() or "common"
                 live_workflow(target=target, url=url, ports=ports, timeout=0.7)
+            elif choice == "47":
+                target = input("Authorized host/IP: ").strip()
+                name = input("Engagement name [target]: ").strip() or None
+                url = input("Optional URL [auto infer]: ").strip() or None
+                output_dir = input("Workspace directory [engagements/<name>]: ").strip() or None
+                ports = input("Ports [common]: ").strip() or "common"
+                skip_whois = input("Skip WHOIS? [y/N]: ").strip().lower() in {"y", "yes"}
+                skip_web = input("Skip web checks? [y/N]: ").strip().lower() in {"y", "yes"}
+                target_brief(
+                    target=target,
+                    name=name,
+                    url=url,
+                    output_dir=output_dir,
+                    ports=ports,
+                    timeout=0.7,
+                    skip_whois=skip_whois,
+                    skip_web=skip_web,
+                    install_missing=False,
+                    package_manager=None,
+                )
             elif choice == "32":
                 args = shlex.split(input("Hatch args [--version]: ").strip() or "--version")
                 install_missing = input("Install Hatch if missing? [y/N]: ").strip().lower() in {"y", "yes"}
@@ -5680,11 +6009,8 @@ def interactive_menu() -> None:
                 )
             elif choice == "44":
                 vps_console()
-            elif choice == "45":
-                print_exit_screen("Session closed from the interactive menu.", 0)
-                break
             else:
-                print("Invalid choice.")
+                print("Invalid choice. Use ? for help or q to exit.")
         except (ValueError, OSError, ConnectionError, TimeoutError) as error:
             print(f"[ERROR] {error}")
 
@@ -5702,6 +6028,8 @@ def main(argv: list[str] | None = None) -> int:
             results = print_roadmap(args.category)
         elif args.command == "tools":
             results = check_tools(args.category)
+        elif args.command == "doctor":
+            results = doctor(args.category)
         elif args.command == "install-hints":
             results = print_install_hints(args.tool)
         elif args.command == "install-tool":
@@ -5957,6 +6285,19 @@ def main(argv: list[str] | None = None) -> int:
                 package_manager=args.package_manager,
                 dry_run=args.dry_run,
             )
+        elif args.command in {"target-brief", "brief"}:
+            results = target_brief(
+                target=args.target,
+                name=args.name,
+                url=args.url,
+                output_dir=args.output_dir,
+                ports=args.ports,
+                timeout=args.timeout,
+                skip_whois=args.skip_whois,
+                skip_web=args.skip_web,
+                install_missing=args.install_missing,
+                package_manager=args.package_manager,
+            )
         elif args.command == "shodan":
             results = shodan_lookup(
                 args.target,
@@ -6037,6 +6378,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command in {
             "roadmap",
             "tools",
+            "doctor",
             "install-hints",
             "install-tool",
             "install-tools",
@@ -6046,6 +6388,8 @@ def main(argv: list[str] | None = None) -> int:
             "seclists-find",
             "lab-init",
             "engagement-init",
+            "target-brief",
+            "brief",
             "tryhackme",
             "thm",
             "password-audit",
