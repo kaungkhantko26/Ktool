@@ -1265,15 +1265,63 @@ def directory_scanner(
 
 def web_baseline(url: str, timeout: float, delay: float) -> dict[str, object]:
     print("\n[+] Running safe web baseline checks")
-    headers = header_analyzer(url, timeout=timeout)
+    normalized = normalize_url(url)
+    headers = header_analyzer(normalized, timeout=timeout)
     paths = directory_scanner(
-        url,
+        normalized,
         paths=DEFAULT_PATHS,
         timeout=timeout,
         delay=delay,
         show_all=False,
     )
-    return {"headers": asdict(headers), "paths": [asdict(path) for path in paths]}
+    surface: dict[str, object] = {
+        "technologies": [],
+        "missing_security_headers": headers.missing_security_headers,
+        "cookie_issues": [],
+        "http_methods": {"status": None, "allow": [], "risky": []},
+        "cors_issues": [],
+        "html_summary": {"forms": 0, "password_fields": 0, "page_title": ""},
+        "findings": [],
+    }
+    if not headers.error:
+        try:
+            status, response_headers, body = http_request(normalized, method="GET", timeout=timeout)
+            accessible_paths = [
+                asdict(result)
+                for result in paths
+                if result.status is not None and result.status < 400
+            ]
+            surface = summarize_web_findings(
+                normalized,
+                response_headers,
+                body,
+                timeout=timeout,
+                exposed_paths=accessible_paths,
+            )
+            print(f"\n[Baseline status] HTTP {status}")
+            if surface["technologies"]:
+                print("[TECH] " + ", ".join(str(item) for item in surface["technologies"]))
+            html_summary = surface["html_summary"]
+            if isinstance(html_summary, dict):
+                print(
+                    "[HTML] "
+                    f"title={html_summary.get('page_title') or 'n/a'} | "
+                    f"forms={html_summary.get('forms', 0)} | "
+                    f"password_fields={html_summary.get('password_fields', 0)}"
+                )
+            if surface["findings"]:
+                print("\n[Baseline findings]")
+                for finding in surface["findings"][:12]:
+                    print(f"[{finding['severity'].upper()}] {finding['type']}: {finding['detail']}")
+                remaining = len(surface["findings"]) - 12
+                if remaining > 0:
+                    print(f"[i] {remaining} more finding(s) were saved in the JSON report.")
+            else:
+                print("\n[OK] No obvious web hygiene issues found in the baseline sample.")
+        except ConnectionError as error:
+            surface = {"error": str(error), **surface}
+            print(f"[i] Web surface analysis skipped: {error}")
+    return {"headers": asdict(headers), "paths": [asdict(path) for path in paths], "surface": surface}
 
 
 def extract_web_technologies(headers: dict[str, str], body: bytes) -> list[str]:
@@ -1342,6 +1390,176 @@ def check_http_methods(url: str, timeout: float) -> dict[str, object]:
     allowed = sorted({method.strip().upper() for method in allow_header.split(",") if method.strip()})
     risky = sorted(set(allowed) & {"DELETE", "PUT", "TRACE", "CONNECT"})
     return {"status": status, "allow": allowed, "risky": risky}
+
+
+def analyze_cors_policy(headers: dict[str, str]) -> list[dict[str, str]]:
+    issues: list[dict[str, str]] = []
+    allow_origin = headers.get("Access-Control-Allow-Origin", "").strip()
+    allow_credentials = headers.get("Access-Control-Allow-Credentials", "").strip().lower()
+    expose_headers = headers.get("Access-Control-Expose-Headers", "").strip()
+
+    if not allow_origin:
+        return issues
+    if allow_origin == "*" and allow_credentials == "true":
+        issues.append(
+            {
+                "severity": "high",
+                "type": "cors_misconfiguration",
+                "detail": "Access-Control-Allow-Origin: * with Access-Control-Allow-Credentials: true",
+            }
+        )
+    elif allow_origin == "*":
+        issues.append(
+            {
+                "severity": "medium",
+                "type": "broad_cors_policy",
+                "detail": "Access-Control-Allow-Origin allows any origin",
+            }
+        )
+    elif allow_origin == "null":
+        issues.append(
+            {
+                "severity": "medium",
+                "type": "cors_null_origin",
+                "detail": "Access-Control-Allow-Origin allows the null origin",
+            }
+        )
+    if expose_headers == "*":
+        issues.append(
+            {
+                "severity": "low",
+                "type": "broad_cors_exposed_headers",
+                "detail": "Access-Control-Expose-Headers is set to *",
+            }
+        )
+    return issues
+
+
+def analyze_body_exposures(url: str, body: bytes) -> tuple[list[dict[str, str]], dict[str, object]]:
+    text = body.decode("utf-8", errors="ignore")[:128000]
+    lower_text = text.lower()
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    findings: list[dict[str, str]] = []
+
+    if re.search(r"(<title>\s*index of /|directory listing for|parent directory)", lower_text):
+        findings.append(
+            {
+                "severity": "high",
+                "type": "directory_listing",
+                "detail": "Directory listing markers were detected in the response body",
+            }
+        )
+    if re.search(r"(phpinfo\(\)|php version \d+\.\d+|document_root|server_addr|server_api)", lower_text):
+        findings.append(
+            {
+                "severity": "high",
+                "type": "debug_exposure",
+                "detail": "phpinfo/debug environment markers were detected",
+            }
+        )
+    if re.search(
+        r"(traceback \(most recent call last\)|stack trace|fatal error:|uncaught exception|sql syntax.*mysql|odbc sql server driver|exception in thread)",
+        lower_text,
+    ):
+        findings.append(
+            {
+                "severity": "medium",
+                "type": "error_leakage",
+                "detail": "Application error or stack-trace markers were detected",
+            }
+        )
+
+    form_matches = re.findall(r"<form\b[^>]*?(?:action=[\"']?([^\"'>\s]+))?[^>]*?(?:method=[\"']?([^\"'>\s]+))?[^>]*>", text, re.I)
+    password_fields = len(re.findall(r"<input[^>]+type=[\"']?password", text, re.I))
+    external_forms = 0
+    insecure_forms = 0
+    for action, _method in form_matches[:20]:
+        if not action:
+            continue
+        target = urljoin(url, action)
+        target_parsed = urlparse(target)
+        target_host = target_parsed.hostname or host
+        if target_host.lower() != host.lower():
+            external_forms += 1
+        if parsed.scheme == "https" and target_parsed.scheme == "http":
+            insecure_forms += 1
+    if external_forms:
+        findings.append(
+            {
+                "severity": "medium",
+                "type": "external_form_action",
+                "detail": f"{external_forms} HTML form action(s) post to a different host",
+            }
+        )
+    if insecure_forms:
+        findings.append(
+            {
+                "severity": "high",
+                "type": "insecure_form_action",
+                "detail": f"{insecure_forms} HTML form action(s) downgrade from HTTPS to HTTP",
+            }
+        )
+
+    html_summary = {
+        "forms": len(form_matches),
+        "password_fields": password_fields,
+        "page_title": "",
+    }
+    title_match = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
+    if title_match:
+        html_summary["page_title"] = re.sub(r"\s+", " ", title_match.group(1)).strip()
+    return findings, html_summary
+
+
+def summarize_web_findings(
+    url: str,
+    headers: dict[str, str],
+    body: bytes,
+    timeout: float,
+    exposed_paths: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    parsed = urlparse(url)
+    missing_headers = [
+        header
+        for header in SECURITY_HEADERS
+        if header.lower() not in {key.lower() for key in headers}
+    ]
+    technologies = extract_web_technologies(headers, body)
+    cookie_issues = analyze_cookie_flags(headers, parsed.scheme)
+    method_result = check_http_methods(url, timeout=timeout)
+    cors_issues = analyze_cors_policy(headers)
+    body_findings, html_summary = analyze_body_exposures(url, body)
+
+    findings: list[dict[str, object]] = []
+    for header in missing_headers:
+        findings.append({"severity": "medium", "type": "missing_security_header", "detail": header})
+    server_header = headers.get("Server")
+    if server_header:
+        findings.append({"severity": "low", "type": "server_header_disclosure", "detail": server_header})
+    powered_by = headers.get("X-Powered-By")
+    if powered_by:
+        findings.append({"severity": "low", "type": "powered_by_disclosure", "detail": powered_by})
+    for issue in cookie_issues:
+        findings.append({"severity": "medium", "type": "cookie_flags", "detail": issue})
+    for method in method_result.get("risky", []):
+        findings.append({"severity": "high", "type": "risky_http_method", "detail": method})
+    findings.extend(cors_issues)
+    findings.extend(body_findings)
+    for exposed in exposed_paths or []:
+        findings.append({"severity": "high", "type": "exposed_sensitive_path", "detail": exposed["url"]})
+
+    severity_rank = {"high": 3, "medium": 2, "low": 1, "info": 0}
+    findings.sort(key=lambda item: (severity_rank.get(str(item["severity"]), 0) * -1, str(item["type"]), str(item["detail"])))
+    return {
+        "technologies": technologies,
+        "missing_security_headers": missing_headers,
+        "cookie_issues": cookie_issues,
+        "http_methods": method_result,
+        "cors_issues": cors_issues,
+        "html_summary": html_summary,
+        "findings": findings,
+    }
 
 
 def searchsploit_metadata(queries: list[str], timeout: float) -> list[dict[str, object]]:
@@ -1413,14 +1631,6 @@ def web_vulnerability_search(
     print("[i] This checks metadata and common misconfigurations; it does not exploit vulnerabilities.")
 
     status, headers, body = http_request(normalized, method="GET", timeout=timeout)
-    missing_headers = [
-        header
-        for header in SECURITY_HEADERS
-        if header.lower() not in {key.lower() for key in headers}
-    ]
-    technologies = extract_web_technologies(headers, body)
-    cookie_issues = analyze_cookie_flags(headers, parsed.scheme)
-    method_result = check_http_methods(normalized, timeout=timeout)
     exposure_results = directory_scanner(
         normalized,
         paths=WEB_EXPOSURE_PATHS,
@@ -1433,33 +1643,38 @@ def web_vulnerability_search(
         for result in exposure_results
         if result.status is not None and result.status < 400
     ]
-
-    findings: list[dict[str, object]] = []
-    for header in missing_headers:
-        findings.append({"severity": "medium", "type": "missing_security_header", "detail": header})
-    for issue in cookie_issues:
-        findings.append({"severity": "medium", "type": "cookie_flags", "detail": issue})
-    for method in method_result.get("risky", []):
-        findings.append({"severity": "high", "type": "risky_http_method", "detail": method})
-    for exposed in exposed_paths:
-        findings.append({"severity": "high", "type": "exposed_sensitive_path", "detail": exposed["url"]})
+    summary = summarize_web_findings(
+        normalized,
+        headers,
+        body,
+        timeout=timeout,
+        exposed_paths=exposed_paths,
+    )
 
     print(f"\n[STATUS] HTTP {status}")
-    if technologies:
-        print("[TECH] " + ", ".join(technologies))
+    if summary["technologies"]:
+        print("[TECH] " + ", ".join(str(item) for item in summary["technologies"]))
     else:
         print("[TECH] No obvious framework/server fingerprint beyond headers.")
+    html_summary = summary["html_summary"]
+    if isinstance(html_summary, dict):
+        print(
+            "[HTML] "
+            f"title={html_summary.get('page_title') or 'n/a'} | "
+            f"forms={html_summary.get('forms', 0)} | "
+            f"password_fields={html_summary.get('password_fields', 0)}"
+        )
 
-    if findings:
+    if summary["findings"]:
         print("\n[Potential issues]")
-        for finding in findings:
+        for finding in summary["findings"]:
             print(f"[{finding['severity'].upper()}] {finding['type']}: {finding['detail']}")
     else:
         print("\n[OK] No obvious baseline web issues found.")
 
     exploitdb_results: list[dict[str, object]] = []
-    if use_searchsploit and technologies:
-        queries = technologies[:5]
+    if use_searchsploit and summary["technologies"]:
+        queries = [str(item) for item in summary["technologies"][:5]]
         exploitdb_results = searchsploit_metadata(queries, timeout=timeout)
     elif use_searchsploit:
         print("[i] No technologies found for searchsploit queries.")
@@ -1472,12 +1687,14 @@ def web_vulnerability_search(
         "url": normalized,
         "status": status,
         "headers": headers,
-        "technologies": technologies,
-        "missing_security_headers": missing_headers,
-        "cookie_issues": cookie_issues,
-        "http_methods": method_result,
+        "technologies": summary["technologies"],
+        "missing_security_headers": summary["missing_security_headers"],
+        "cookie_issues": summary["cookie_issues"],
+        "http_methods": summary["http_methods"],
+        "cors_issues": summary["cors_issues"],
+        "html_summary": summary["html_summary"],
         "exposed_paths": exposed_paths,
-        "findings": findings,
+        "findings": summary["findings"],
         "searchsploit": exploitdb_results,
         "nikto": nikto_result,
     }
