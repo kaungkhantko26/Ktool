@@ -1,6 +1,6 @@
-# Ktool
+# KTOOL LabOps
 
-Ktool 2.1.1 is a Linux-friendly ethical security assessment tool for authorized testing.
+KTOOL LabOps is a Linux-friendly lab and web assessment console for TryHackMe rooms, owned systems, and written-scope security testing.
 
 ## Quick Start
 
@@ -50,7 +50,7 @@ Manage it:
 ./ktool-auto-deploy.sh uninstall
 ```
 
-Example authorized checks:
+Example scoped checks:
 
 ```bash
 ktool dns example.com --yes-i-am-authorized
@@ -113,6 +113,20 @@ ktool dns-leak-check
 ktool lan-device-list
 ktool firewall-check
 ktool service-audit
+ktool vps-ui
+ktool vps-login --host root@203.0.113.10
+ktool vps-check
+ktool vps-check --only storage --only usage
+ktool vps-storage --host root@203.0.113.10 --dry-run
+ktool vps-usage --host root@203.0.113.10 --dry-run
+ktool vps-pm2 --host root@203.0.113.10 --dry-run
+ktool vps-ls --host root@203.0.113.10 --path /var/www --dry-run
+ktool vps-services --host root@203.0.113.10 --service nginx --service pm2 --dry-run
+ktool vps-logs --host root@203.0.113.10 --dry-run
+ktool vps-docker --host root@203.0.113.10 --dry-run
+ktool vps-check --path /var/www --path /root --service nginx --service pm2
+ktool vps-check --host root@203.0.113.10 --path /var/www --service nginx --logs --dry-run
+ktool vps-check --host root@203.0.113.10 --identity ~/.ssh/id_ed25519 --docker --logs --report reports/vps-health.json
 ktool update-check
 ktool ssh-audit-local
 ktool iphone-health-guide
@@ -148,11 +162,24 @@ External tool wrappers:
 
 ```bash
 ktool external-examples
+ktool seclists-find
+ktool seclists-find --category directory-small
 ktool install-hints hatch
+ktool install-hints gobuster
+ktool install-hints dirb
+ktool install-hints seclists
 ktool install-tool ncat
 ktool install-tool ncat --execute
 ktool install-tools --category web --manager apt
 ktool install-tools --category web --manager apt --execute
+ktool lab-init tryhackme-room --client TryHackMe --target 10.10.10.10
+ktool thm --room tryhackme-room --target 10.10.10.10 --dry-run --yes-i-am-authorized
+ktool tryhackme --room tryhackme-room --target 10.10.10.10 --content-scan --yes-i-am-authorized
+ktool tryhackme --room tryhackme-room --target 10.10.10.10 --content-scan --content-tool dirb --yes-i-am-authorized
+ktool content-discovery https://example.com --tool gobuster --wordlist-kind directory-small --yes-i-am-authorized
+ktool gobuster https://example.com --wordlist /usr/share/seclists/Discovery/Web-Content/common.txt --yes-i-am-authorized
+ktool ffuf https://example.com --wordlist /usr/share/seclists/Discovery/Web-Content/common.txt --rate 50 --yes-i-am-authorized
+ktool dirb https://example.com --wordlist /usr/share/seclists/Discovery/Web-Content/common.txt --yes-i-am-authorized
 ktool fingerprint https://example.com --tools whatweb,wafw00f,httpx --yes-i-am-authorized
 ktool tls-audit https://example.com --tools testssl.sh,sslscan --yes-i-am-authorized
 ktool dns-enum example.com --tools dnsrecon,subfinder,amass --yes-i-am-authorized
@@ -164,16 +191,16 @@ ktool js-audit https://example.com --tools retire,semgrep,trufflehog --output js
 
 The external wrappers run the real Linux tools when they are installed. Use `install-tools` for package-manager tools and `install-hints` for tools that need Go, Python, npm, GitHub releases, or manual setup.
 For the single-file CLI commands in `tool.py`, `--install-missing` can install supported dependencies such as `nmap`, `ncat`, `tcpdump`, `whois`, or Python `scapy` with the detected package manager.
-Ktool does not bypass operating-system permissions. If packet capture or raw socket tools return `Operation not permitted`, use `ktool permission-guide` for approved fixes such as sudo, Linux capabilities, or macOS packet-capture setup.
-Use `ktool sudo-su -- <command args>` to relaunch one Ktool command through the operating system's approved sudo policy, or `ktool sudo-su` to open the interactive menu as root.
+KTOOL LabOps does not bypass operating-system permissions. If packet capture or raw socket tools return `Operation not permitted`, use `ktool permission-guide` for approved fixes such as sudo, Linux capabilities, or macOS packet-capture setup.
+Use `ktool sudo-su -- <command args>` to relaunch one LabOps command through the operating system's approved sudo policy, or `ktool sudo-su` to open the interactive menu as root.
 Password commands use Python `secrets`; sensitive reports and admin password output files are written with mode `0600`.
 API-backed intelligence commands use environment variables by default: `SHODAN_API_KEY`, `NVD_API_KEY`, and `VIRUSTOTAL_API_KEY`. You can also pass `--api-key` per command.
 
-Use Ktool only on systems you own, lab environments, or targets where you have explicit written permission.
+Use KTOOL LabOps only on systems you own, lab environments, or targets where you have explicit written permission.
 
 ## Deploy Updates
 
-Push local Ktool changes to GitHub:
+Push local KTOOL LabOps changes to GitHub:
 
 ```bash
 ./deploy.sh
@@ -185,7 +212,7 @@ Use a custom commit message:
 ./deploy.sh "Update Ktool features"
 ```
 
-Pull the latest Ktool from GitHub:
+Pull the latest KTOOL LabOps from GitHub:
 
 ```bash
 update-ktool.sh

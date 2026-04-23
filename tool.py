@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ktool - Linux-friendly ethical security assessment template.
+KTOOL LabOps - Linux-friendly lab and assessment console.
 
 Use this tool only on systems you own or have explicit written permission to
 test. The active checks here focus on reconnaissance, defensive visibility,
@@ -128,9 +128,11 @@ SECURITY_HEADERS = {
     "Permissions-Policy": "Restricts powerful browser features.",
 }
 
-TOOL_NAME = "Ktool"
-TOOL_OWNER = "Ktool owner"
-USER_AGENT = "Ktool/2.0 (+authorized-security-testing)"
+TOOL_NAME = "KTOOL LabOps"
+TOOL_OWNER = "LabOps user"
+TOOL_TAGLINE = "authorized lab and web assessment console"
+TOOL_COMMAND = "ktool"
+USER_AGENT = "KTOOL-LabOps/3.0 (+authorized-security-testing)"
 TERMINAL_WIDTH = 78
 SHODAN_API_KEY_ENV = "SHODAN_API_KEY"
 NVD_API_KEY_ENV = "NVD_API_KEY"
@@ -138,12 +140,24 @@ VIRUSTOTAL_API_KEY_ENV = "VIRUSTOTAL_API_KEY"
 
 PACKAGE_NAMES = {
     "hatch": {"brew": "hatch"},
+    "amass": {"apt": "amass", "dnf": "amass", "pacman": "amass", "brew": "amass"},
+    "dirb": {"apt": "dirb"},
+    "docker": {"apt": "docker.io", "dnf": "docker", "pacman": "docker", "brew": "docker"},
+    "dnsrecon": {"apt": "dnsrecon", "brew": "dnsrecon"},
+    "ffuf": {"apt": "ffuf", "pacman": "ffuf", "brew": "ffuf"},
+    "gobuster": {"apt": "gobuster", "pacman": "gobuster", "brew": "gobuster"},
     "nmap": {"apt": "nmap", "dnf": "nmap", "pacman": "nmap", "brew": "nmap"},
     "ncat": {"apt": "ncat", "dnf": "nmap-ncat", "pacman": "nmap", "brew": "nmap"},
     "nc": {"apt": "netcat-openbsd", "dnf": "nmap-ncat", "pacman": "openbsd-netcat", "brew": "netcat"},
+    "seclists": {"apt": "seclists", "pacman": "seclists", "brew": "seclists"},
+    "searchsploit": {"apt": "exploitdb", "dnf": "exploitdb", "pacman": "exploitdb"},
+    "ssh": {"apt": "openssh-client", "dnf": "openssh-clients", "pacman": "openssh", "brew": "openssh"},
+    "sslscan": {"apt": "sslscan", "dnf": "sslscan", "pacman": "sslscan", "brew": "sslscan"},
     "whois": {"apt": "whois", "dnf": "whois", "pacman": "whois", "brew": "whois"},
     "tcpdump": {"apt": "tcpdump", "dnf": "tcpdump", "pacman": "tcpdump", "brew": "tcpdump"},
     "nikto": {"apt": "nikto", "dnf": "nikto", "pacman": "nikto", "brew": "nikto"},
+    "wafw00f": {"apt": "wafw00f", "pacman": "wafw00f", "brew": "wafw00f"},
+    "whatweb": {"apt": "whatweb", "pacman": "whatweb", "brew": "whatweb"},
     "iw": {"apt": "iw", "dnf": "iw", "pacman": "iw", "brew": "wireless-tools"},
     "nmcli": {"apt": "network-manager", "dnf": "NetworkManager", "pacman": "networkmanager", "brew": "network-manager"},
 }
@@ -341,14 +355,15 @@ def print_key_value_table(rows: list[tuple[str, str]]) -> None:
 
 
 def print_exit_screen(reason: str = "Session closed", exit_code: int = 0) -> None:
-    title = "Ktool Security Console"
+    title = f"{TOOL_NAME} Console"
     lines = [
         title,
-        f"Built by: {TOOL_OWNER}",
+        TOOL_TAGLINE,
+        f"Profile: {TOOL_OWNER}",
         "",
         reason,
         "No tasks are still running.",
-        "Ktool session complete. Keep authorization documented.",
+        "Session complete. Keep authorization and notes with the workspace.",
         "",
         f"Exit code: {exit_code}",
     ]
@@ -370,72 +385,110 @@ def print_exit_screen(reason: str = "Session closed", exit_code: int = 0) -> Non
 
 def print_startup_banner() -> None:
     banner = r"""
-██╗  ██╗████████╗ ██████╗  ██████╗ ██╗
-██║ ██╔╝╚══██╔══╝██╔═══██╗██╔═══██╗██║
-█████╔╝    ██║   ██║   ██║██║   ██║██║
-██╔═██╗    ██║   ██║   ██║██║   ██║██║
-██║  ██╗   ██║   ╚██████╔╝╚██████╔╝███████╗
-╚═╝  ╚═╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝
+██╗  ██╗████████╗ ██████╗  ██████╗ ██╗      ██╗      █████╗ ██████╗  ██████╗ ██████╗ ███████╗
+██║ ██╔╝╚══██╔══╝██╔═══██╗██╔═══██╗██║      ██║     ██╔══██╗██╔══██╗██╔═══██╗██╔══██╗██╔════╝
+█████╔╝    ██║   ██║   ██║██║   ██║██║      ██║     ███████║██████╔╝██║   ██║██████╔╝███████╗
+██╔═██╗    ██║   ██║   ██║██║   ██║██║      ██║     ██╔══██║██╔══██╗██║   ██║██╔═══╝ ╚════██║
+██║  ██╗   ██║   ╚██████╔╝╚██████╔╝███████╗ ███████╗██║  ██║██████╔╝╚██████╔╝██║     ███████║
+╚═╝  ╚═╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝ ╚══════╝╚═╝  ╚═╝╚═════╝  ╚═════╝ ╚═╝     ╚══════╝
 """
     print(color(banner.rstrip(), "1;32"))
-    print(color("        ops console // authorized cyber workbench", "36"))
-    print(color(f"        built by: {TOOL_OWNER}", "36"))
-    print(color("        scan | sniff | audit | message | report", "90"))
-    print(color("        authorization required for target activity", "90"))
+    print(color(f"        {TOOL_TAGLINE}", "36"))
+    print(color(f"        profile: {TOOL_OWNER}", "36"))
+    print(color("        workflow: recon | web | tryhackme | local defense | reports", "90"))
+    print(color("        active checks require explicit permission or a lab target", "90"))
 
 
 def print_menu_panel() -> None:
-    menu_items = [
-        ("1", "Learning Roadmap"),
-        ("2", "Tool Availability Check"),
-        ("3", "DNS Lookup"),
-        ("4", "WHOIS Lookup"),
-        ("5", "TCP Port Scanner"),
-        ("6", "Subdomain Resolver"),
-        ("7", "HTTP Header Analyzer"),
-        ("8", "Common Path Checker"),
-        ("9", "Safe Web Baseline"),
-        ("10", "Conservative nmap Scan"),
-        ("11", "LAN Device Scanner"),
-        ("12", "Scapy Packet Sniffer"),
-        ("13", "Password Strength Check"),
-        ("14", "Password Generator"),
-        ("15", "ncat Port Messenger"),
-        ("16", "Admin Password Generator"),
-        ("17", "Run Ktool as Root"),
-        ("18", "Permission Guide"),
-        ("19", "Password Policy Audit"),
-        ("20", "Packet Capture Sample"),
-        ("21", "Wireless Interface Info"),
-        ("22", "Vulnerability Lookup"),
-        ("23", "Awareness Plan"),
-        ("24", "Local Posture Review"),
-        ("25", "Install Hints"),
-        ("26", "Install Tool"),
-        ("27", "Web Vulnerability Search"),
-        ("28", "Live Connection Watch"),
-        ("29", "Log Watch"),
-        ("30", "IOC Triage"),
-        ("31", "Authorized Live Workflow"),
-        ("32", "Hatch Tool"),
-        ("33", "Threat Site Triage"),
-        ("34", "Defang / Refang IOC"),
-        ("35", "Shodan Host Intelligence"),
-        ("36", "NVD CVE Lookup"),
-        ("37", "VirusTotal IOC Lookup"),
-        ("38", "Mobile Artifact Audit"),
-        ("39", "Exit"),
+    menu_groups = [
+        (
+            "START",
+            [
+                ("1", "Skill Roadmap"),
+                ("2", "Tool Readiness Check"),
+                ("25", "Install Hints"),
+                ("26", "Install Tool"),
+                ("39", "Workflow Examples"),
+                ("40", "SecLists Finder"),
+            ],
+        ),
+        (
+            "RECON",
+            [
+                ("3", "DNS Lookup"),
+                ("4", "WHOIS Lookup"),
+                ("5", "TCP Port Check"),
+                ("6", "Subdomain Resolver"),
+                ("10", "nmap First Pass"),
+                ("22", "Vulnerability Lookup"),
+                ("35", "Shodan Host Intelligence"),
+                ("36", "NVD CVE Lookup"),
+            ],
+        ),
+        (
+            "WEB",
+            [
+                ("7", "HTTP Header Analyzer"),
+                ("8", "Common Path Probe"),
+                ("9", "Safe Web Baseline"),
+                ("27", "Web Risk Baseline"),
+                ("41", "Content Discovery: Gobuster / FFUF / Dirb"),
+            ],
+        ),
+        (
+            "LABS",
+            [
+                ("31", "Live Target Workflow"),
+                ("42", "Lab Workspace Setup"),
+                ("43", "TryHackMe Room Workflow"),
+            ],
+        ),
+        (
+            "LOCAL DEFENSE",
+            [
+                ("11", "LAN Device Inventory"),
+                ("12", "Scapy Packet Sniffer"),
+                ("20", "Packet Capture"),
+                ("21", "Wireless Interface Info"),
+                ("24", "Local Posture Review"),
+                ("44", "VPS Health Check"),
+                ("28", "Live Connection Watch"),
+                ("29", "Log Watch"),
+                ("30", "IOC Triage"),
+                ("33", "Threat Site Triage"),
+                ("34", "Defang / Refang IOC"),
+                ("37", "VirusTotal IOC Lookup"),
+                ("38", "Mobile Artifact Audit"),
+            ],
+        ),
+        (
+            "UTILITIES",
+            [
+                ("13", "Password Strength Check"),
+                ("14", "Password Generator"),
+                ("15", "ncat Port Messenger"),
+                ("16", "Admin Password Generator"),
+                ("17", "Run LabOps as Root"),
+                ("18", "Permission Guide"),
+                ("19", "Password Policy Audit"),
+                ("23", "Awareness Plan Builder"),
+                ("32", "Hatch Runner"),
+                ("45", "Exit"),
+            ],
+        ),
     ]
-    width = 54
+    width = 62
     border = "+" + "-" * width + "+"
     print()
     print(color(border, "32"))
-    print(color("|", "32") + color(" KTOOL OPS CONSOLE ".center(width), "1;32") + color("|", "32"))
-    print(color("|", "32") + color(" defensive systems only ".center(width), "90") + color("|", "32"))
+    print(color("|", "32") + color(f" {TOOL_NAME.upper()} ".center(width), "1;32") + color("|", "32"))
+    print(color("|", "32") + color(" pick a workflow, then follow the prompts ".center(width), "90") + color("|", "32"))
     print(color(border, "32"))
-    for number, label in menu_items:
-        line = f" [{number.rjust(2)}] {label}"
-        print(color("|", "32") + line.ljust(width) + color("|", "32"))
+    for title, items in menu_groups:
+        print(color("|", "32") + color(f" {title} ".ljust(width), "1;36") + color("|", "32"))
+        for number, label in items:
+            line = f" [{number.rjust(2)}] {label}"
+            print(color("|", "32") + line.ljust(width) + color("|", "32"))
     print(color(border, "32"))
 
 
@@ -454,9 +507,9 @@ TOOL_CATEGORIES = {
     },
     "web": {
         "title": "Web Application Testing",
-        "skills": ["Security headers", "Common path discovery", "Proxy-based manual testing"],
-        "tools": ["burpsuite", "zaproxy", "sqlmap", "ffuf", "nikto", "searchsploit"],
-        "implemented": ["headers", "dirs", "web", "web-vuln-search"],
+        "skills": ["Security headers", "Common path discovery", "Fingerprinting", "Proxy-based manual testing"],
+        "tools": ["burpsuite", "zaproxy", "gobuster", "ffuf", "dirb", "seclists", "whatweb", "wafw00f", "nikto", "searchsploit"],
+        "implemented": ["headers", "dirs", "web", "web-vuln-search", "content-discovery", "fingerprint", "web-scan", "js-audit"],
     },
     "threat": {
         "title": "Threat Site Investigation",
@@ -466,9 +519,9 @@ TOOL_CATEGORIES = {
     },
     "intel": {
         "title": "Exposure and Vulnerability Intelligence",
-        "skills": ["Passive internet exposure review", "CVE research", "Service-to-risk mapping", "Mobile artifact triage"],
-        "tools": ["Shodan", "NVD", "VirusTotal", "searchsploit", "apktool"],
-        "implemented": ["shodan", "cve-lookup", "virustotal", "vuln-lookup", "mobile-artifact-audit"],
+        "skills": ["Passive internet exposure review", "CVE research", "Service-to-risk mapping", "TLS review", "Mobile artifact triage"],
+        "tools": ["Shodan", "NVD", "VirusTotal", "searchsploit", "apktool", "testssl.sh", "sslscan", "nuclei"],
+        "implemented": ["shodan", "cve-lookup", "virustotal", "vuln-lookup", "tls-audit", "mobile-artifact-audit"],
     },
     "passwords": {
         "title": "Password Security Testing",
@@ -520,9 +573,15 @@ TOOL_CATEGORIES = {
     },
     "tooling": {
         "title": "Developer Tooling",
-        "skills": ["Python project environments", "Build automation", "Task runner integration"],
+        "skills": ["Python project environments", "Build automation", "Task runner integration", "Lab workspace setup"],
         "tools": ["hatch"],
-        "implemented": ["hatch"],
+        "implemented": ["hatch", "lab-init", "external-examples", "seclists-find"],
+    },
+    "vps": {
+        "title": "VPS Operations",
+        "skills": ["Storage checks", "PM2 process review", "Service status", "Read-only SSH health checks", "Deployment directory inventory"],
+        "tools": ["ssh", "pm2", "docker", "systemctl", "journalctl", "df", "du", "ls", "ss"],
+        "implemented": ["vps-check"],
     },
 }
 
@@ -530,16 +589,78 @@ TOOL_ALIASES = {
     "burpsuite": ["burpsuite", "burp-suite", "BurpSuiteCommunity"],
     "zaproxy": ["zaproxy", "owasp-zap", "zap"],
     "sublist3r": ["sublist3r", "Sublist3r"],
+    "amass": ["amass"],
+    "dirb": ["dirb"],
+    "docker": ["docker"],
     "aircrack-ng": ["aircrack-ng"],
     "airodump-ng": ["airodump-ng"],
+    "dnsrecon": ["dnsrecon"],
+    "ffuf": ["ffuf"],
+    "gau": ["gau"],
+    "gobuster": ["gobuster"],
+    "httpx": ["httpx", "httpx-toolkit"],
+    "katana": ["katana"],
     "msfconsole": ["msfconsole"],
+    "nuclei": ["nuclei"],
+    "retire": ["retire", "retirejs"],
+    "semgrep": ["semgrep"],
     "setoolkit": ["setoolkit", "setoolkit-launcher"],
+    "sslscan": ["sslscan"],
+    "subfinder": ["subfinder"],
+    "testssl.sh": ["testssl.sh", "testssl"],
     "theHarvester": ["theHarvester", "theharvester"],
     "linpeas": ["linpeas", "linpeas.sh"],
     "nikto": ["nikto", "nikto.pl"],
     "ncat": ["ncat", "nc"],
     "nc": ["nc", "ncat", "netcat"],
     "hatch": ["hatch"],
+    "pm2": ["pm2"],
+    "ssh": ["ssh"],
+    "trufflehog": ["trufflehog"],
+    "wafw00f": ["wafw00f"],
+    "waybackurls": ["waybackurls"],
+    "whatweb": ["whatweb"],
+}
+
+SECLISTS_ROOT_CANDIDATES = [
+    "/usr/share/seclists",
+    "/usr/share/SecLists",
+    "/opt/SecLists",
+    "/usr/local/share/seclists",
+    "/usr/local/opt/seclists/share/seclists",
+    str(Path.home() / "SecLists"),
+]
+
+SECLISTS_WORDLISTS = {
+    "directory-small": [
+        "Discovery/Web-Content/directory-list-2.3-small.txt",
+        "Discovery/Web-Content/common.txt",
+    ],
+    "directory-medium": [
+        "Discovery/Web-Content/directory-list-2.3-medium.txt",
+        "Discovery/Web-Content/raft-medium-directories.txt",
+    ],
+    "web-common": [
+        "Discovery/Web-Content/common.txt",
+        "Discovery/Web-Content/quickhits.txt",
+    ],
+    "api": [
+        "Discovery/Web-Content/api/api-endpoints.txt",
+        "Discovery/Web-Content/api/objects.txt",
+    ],
+    "subdomains": [
+        "Discovery/DNS/subdomains-top1million-5000.txt",
+        "Discovery/DNS/namelist.txt",
+    ],
+}
+
+EXTERNAL_WRAPPER_TOOLS = {
+    "fingerprint": ["whatweb", "wafw00f", "httpx"],
+    "tls-audit": ["testssl.sh", "sslscan", "nmap"],
+    "dns-enum": ["dnsrecon", "subfinder", "amass"],
+    "url-discovery": ["waybackurls", "gau", "katana"],
+    "web-scan": ["nuclei", "nikto"],
+    "js-audit": ["retire", "semgrep", "trufflehog"],
 }
 
 INSTALL_HINTS = {
@@ -547,7 +668,48 @@ INSTALL_HINTS = {
         "Python user install": "python3 -m pip install --user hatch",
         "pipx": "pipx install hatch",
         "macOS": "brew install hatch",
-        "Ktool": "ktool hatch --install-missing -- --version",
+        "LabOps": "ktool hatch --install-missing -- --version",
+    },
+    "gobuster": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install gobuster",
+        "Arch": "sudo pacman -S gobuster",
+        "macOS": "brew install gobuster",
+        "LabOps": "ktool install-tool gobuster --execute",
+    },
+    "dirb": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install dirb",
+        "Kali": "dirb is usually available from the Kali repositories.",
+        "Manual": "Use Gobuster or FFUF if your platform does not package Dirb.",
+        "LabOps": "ktool install-tool dirb --execute",
+    },
+    "ssh": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install openssh-client",
+        "Fedora": "sudo dnf install openssh-clients",
+        "Arch": "sudo pacman -S openssh",
+        "macOS": "brew install openssh",
+    },
+    "pm2": {
+        "npm": "npm install -g pm2",
+        "Check": "pm2 list",
+        "Docs": "https://pm2.keymetrics.io/",
+    },
+    "docker": {
+        "Debian/Ubuntu": "sudo apt update && sudo apt install docker.io",
+        "Fedora": "sudo dnf install docker",
+        "Arch": "sudo pacman -S docker",
+        "macOS": "brew install --cask docker",
+    },
+    "ffuf": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install ffuf",
+        "Arch": "sudo pacman -S ffuf",
+        "macOS": "brew install ffuf",
+        "Go": "go install github.com/ffuf/ffuf/v2@latest",
+    },
+    "seclists": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install seclists",
+        "Arch": "sudo pacman -S seclists",
+        "macOS": "brew install seclists",
+        "Git": "git clone https://github.com/danielmiessler/SecLists.git ~/SecLists",
     },
     "scapy": {
         "Python": "python3 -m pip install --user scapy",
@@ -587,6 +749,67 @@ INSTALL_HINTS = {
         "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install nikto",
         "Arch": "sudo pacman -S nikto",
         "Fedora": "sudo dnf install nikto",
+    },
+    "whatweb": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install whatweb",
+        "Arch": "sudo pacman -S whatweb",
+        "macOS": "brew install whatweb",
+    },
+    "wafw00f": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install wafw00f",
+        "Arch": "sudo pacman -S wafw00f",
+        "Python": "python3 -m pip install --user wafw00f",
+    },
+    "httpx": {
+        "Go": "go install github.com/projectdiscovery/httpx/cmd/httpx@latest",
+        "ProjectDiscovery": "https://github.com/projectdiscovery/httpx",
+    },
+    "testssl.sh": {
+        "Git": "git clone --depth 1 https://github.com/drwetter/testssl.sh.git ~/tools/testssl.sh",
+        "Run": "~/tools/testssl.sh/testssl.sh --fast https://example.com",
+    },
+    "sslscan": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install sslscan",
+        "Arch": "sudo pacman -S sslscan",
+        "Fedora": "sudo dnf install sslscan",
+        "macOS": "brew install sslscan",
+    },
+    "dnsrecon": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install dnsrecon",
+        "Python": "python3 -m pip install --user dnsrecon",
+    },
+    "subfinder": {
+        "Go": "go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+        "ProjectDiscovery": "https://github.com/projectdiscovery/subfinder",
+    },
+    "amass": {
+        "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install amass",
+        "Arch": "sudo pacman -S amass",
+        "macOS": "brew install amass",
+    },
+    "waybackurls": {
+        "Go": "go install github.com/tomnomnom/waybackurls@latest",
+    },
+    "gau": {
+        "Go": "go install github.com/lc/gau/v2/cmd/gau@latest",
+    },
+    "katana": {
+        "Go": "go install github.com/projectdiscovery/katana/cmd/katana@latest",
+    },
+    "nuclei": {
+        "Go": "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
+        "Templates": "nuclei -update-templates",
+    },
+    "retire": {
+        "npm": "npm install -g retire",
+    },
+    "semgrep": {
+        "Python": "python3 -m pip install --user semgrep",
+        "pipx": "pipx install semgrep",
+    },
+    "trufflehog": {
+        "GitHub release": "https://github.com/trufflesecurity/trufflehog/releases",
+        "macOS": "brew install trufflehog",
     },
     "iw": {
         "Debian/Ubuntu/Kali": "sudo apt update && sudo apt install iw",
@@ -636,11 +859,11 @@ def require_authorization(assume_yes: bool) -> None:
         return
 
     print()
-    print(color("[authorization]", "1;33"))
-    print("Only scan systems you own or have explicit permission to test.")
-    answer = input("Do you have authorization to continue? [y/N]: ").strip().lower()
+    print(color("[scope check]", "1;33"))
+    print("Continue only for your own systems, a lab target, or written-scope work.")
+    answer = input("Confirm authorization for this activity? [y/N]: ").strip().lower()
     if answer not in {"y", "yes"}:
-        print_exit_screen("Authorization was not confirmed.", 1)
+        print_exit_screen("Scope confirmation was not provided.", 1)
         raise SystemExit(1)
 
 
@@ -1468,7 +1691,7 @@ def virustotal_lookup(indicator: str, api_key: str | None, timeout: float) -> di
 
     print_section("VirusTotal Intelligence")
     cyber_line("indicator", defang_value(indicator))
-    print("[i] Reputation lookup only. Ktool does not upload files or submit URL scans.")
+    print(f"[i] Reputation lookup only. {TOOL_NAME} does not upload files or submit URL scans.")
 
     data = http_json_request(url, timeout=timeout, headers={"x-apikey": key})
     matches = data.get("data") if isinstance(data.get("data"), list) else []
@@ -1822,6 +2045,28 @@ def install_system_tool(tool: str, manager: str | None, execute: bool) -> dict[s
     }
 
 
+def install_tools_for_category(category: str, manager: str | None, execute: bool) -> dict[str, object]:
+    if category not in TOOL_CATEGORIES:
+        raise ValueError(f"Unknown category: {category}. Choices: {', '.join(sorted(TOOL_CATEGORIES))}")
+
+    tools = [tool for tool in TOOL_CATEGORIES[category]["tools"] if tool in PACKAGE_NAMES]
+    skipped = [tool for tool in TOOL_CATEGORIES[category]["tools"] if tool not in PACKAGE_NAMES]
+    print_section("Batch Installer")
+    cyber_line("category", category)
+    cyber_line("mode", "execute" if execute else "dry-run")
+    if skipped:
+        print("[i] Skipping tools without package-manager mappings: " + ", ".join(skipped))
+
+    results = []
+    for tool in tools:
+        try:
+            results.append(install_system_tool(tool, manager=manager, execute=execute))
+        except ValueError as error:
+            print(f"[skip] {tool}: {error}")
+            results.append({"tool": tool, "error": str(error), "executed": False})
+    return {"category": category, "manager": manager or detect_package_manager(), "executed": execute, "results": results, "skipped": skipped}
+
+
 def ensure_tool(tool: str, auto_install: bool = False, manager: str | None = None) -> str | None:
     path = find_tool(tool)
     if path:
@@ -1918,6 +2163,560 @@ def hatch_tool(
         "stdout": result.stdout,
         "stderr": result.stderr,
     }
+
+
+def split_tool_names(value: str | None, allowed: list[str]) -> list[str]:
+    if not value:
+        return allowed
+    selected = [item.strip() for item in value.split(",") if item.strip()]
+    unknown = [item for item in selected if item not in allowed]
+    if unknown:
+        raise ValueError(f"Unsupported tool(s): {', '.join(unknown)}. Choices: {', '.join(allowed)}")
+    return selected
+
+
+def target_domain(value: str) -> str:
+    parsed = urlparse(value if "://" in value else f"//{value}")
+    host = parsed.hostname or value.strip().split("/")[0]
+    return validate_host(host).strip(".")
+
+
+def target_port_from_url(value: str, default: int = 443) -> tuple[str, int]:
+    parsed = urlparse(value if "://" in value else f"https://{value}")
+    host = parsed.hostname or validate_host(value)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80 if parsed.scheme == "http" else default)
+    return host, port
+
+
+def find_seclists_roots() -> list[Path]:
+    roots = []
+    for candidate in SECLISTS_ROOT_CANDIDATES:
+        path = Path(candidate).expanduser()
+        if path.exists() and path.is_dir():
+            roots.append(path)
+    return roots
+
+
+def find_seclists_wordlist(category: str) -> Path | None:
+    if category not in SECLISTS_WORDLISTS:
+        raise ValueError(f"Unknown SecLists category: {category}. Choices: {', '.join(sorted(SECLISTS_WORDLISTS))}")
+    for root in find_seclists_roots():
+        for relative in SECLISTS_WORDLISTS[category]:
+            candidate = root / relative
+            if candidate.exists() and candidate.is_file():
+                return candidate
+    return None
+
+
+def seclists_find(category: str | None = None) -> dict[str, object]:
+    categories = [category] if category else sorted(SECLISTS_WORDLISTS)
+    roots = find_seclists_roots()
+    print_section("SecLists Discovery")
+    cyber_line("roots", ", ".join(str(root) for root in roots) if roots else "not found")
+    if not roots:
+        print(install_hint_text("seclists"))
+
+    results: dict[str, object] = {"roots": [str(root) for root in roots], "wordlists": {}}
+    for name in categories:
+        found = find_seclists_wordlist(name)
+        results["wordlists"][name] = str(found) if found else None
+        status = str(found) if found else "missing"
+        print(f"  - {name}: {status}")
+    return results
+
+
+def print_external_examples() -> dict[str, object]:
+    examples = {
+        "content-discovery": "ktool content-discovery https://target --tool gobuster --wordlist-kind directory-small --yes-i-am-authorized",
+        "gobuster alias": "ktool gobuster https://target --wordlist /usr/share/seclists/Discovery/Web-Content/common.txt --yes-i-am-authorized",
+        "dirb alias": "ktool dirb https://target --wordlist /usr/share/seclists/Discovery/Web-Content/common.txt --yes-i-am-authorized",
+        "fingerprint": "ktool fingerprint https://target --tools whatweb,wafw00f,httpx --yes-i-am-authorized",
+        "tls-audit": "ktool tls-audit https://target --tools testssl.sh,sslscan --yes-i-am-authorized",
+        "dns-enum": "ktool dns-enum target.tld --tools dnsrecon,subfinder,amass --yes-i-am-authorized",
+        "url-discovery": "ktool url-discovery https://target --tools waybackurls,gau,katana --yes-i-am-authorized",
+        "web-scan": "ktool web-scan https://target --tool nuclei --rate 20 --yes-i-am-authorized",
+        "js-audit": "ktool js-audit https://target --tools retire,semgrep,trufflehog --output js-downloads --yes-i-am-authorized",
+        "lab workspace": "ktool lab-init tryhackme-room --target 10.10.10.10 --client TryHackMe",
+    }
+    print_section("External Tool Examples")
+    print("[i] These wrappers run installed tools only against authorized targets or labs.")
+    for name, command in examples.items():
+        print(f"\n[{name}]\n  {command}")
+    return {"examples": examples, "tool_groups": EXTERNAL_WRAPPER_TOOLS}
+
+
+def run_external_checked(
+    tool: str,
+    args: list[str],
+    timeout: float,
+    install_missing: bool,
+    package_manager: str | None,
+    dry_run: bool,
+) -> dict[str, object]:
+    tool_path = find_tool(tool)
+    if not tool_path and install_missing and tool in PACKAGE_NAMES:
+        tool_path = ensure_tool(tool, auto_install=True, manager=package_manager)
+    if dry_run and not tool_path:
+        tool_path = tool
+    if not tool_path:
+        print(f"\n[missing] {tool}")
+        print(install_hint_text(tool))
+        return {"tool": tool, "installed": False, "hint": INSTALL_HINTS.get(tool)}
+
+    command = [tool_path, *args]
+    print(f"\n[{tool}] {' '.join(shlex.quote(part) for part in command)}")
+    if dry_run:
+        return {"tool": tool, "installed": True, "command": command, "executed": False}
+
+    result = run_external(command, timeout=timeout)
+    if result.stdout.strip():
+        print(result.stdout.strip())
+    if result.stderr.strip():
+        print(result.stderr.strip(), file=sys.stderr)
+    return {
+        "tool": tool,
+        "installed": True,
+        "command": command,
+        "executed": True,
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+
+
+def content_discovery(
+    url: str,
+    tool: str,
+    wordlist: str | None,
+    wordlist_kind: str,
+    extensions: str | None,
+    status_codes: str,
+    threads: int,
+    rate: int,
+    timeout: float,
+    output: str | None,
+    install_missing: bool,
+    package_manager: str | None,
+    dry_run: bool,
+) -> dict[str, object]:
+    normalized = normalize_url(url)
+    if tool not in {"gobuster", "ffuf", "dirb"}:
+        raise ValueError("--tool must be gobuster, ffuf, or dirb.")
+    if threads < 1 or threads > 100:
+        raise ValueError("--threads must be between 1 and 100.")
+    if rate < 1 or rate > 1000:
+        raise ValueError("--rate must be between 1 and 1000.")
+
+    selected_wordlist = Path(wordlist).expanduser() if wordlist else find_seclists_wordlist(wordlist_kind)
+    if not selected_wordlist or not selected_wordlist.exists():
+        raise ValueError(
+            f"No wordlist found for {wordlist_kind}. Pass --wordlist or install SecLists.\n"
+            + install_hint_text("seclists")
+        )
+
+    print_section("Content Discovery")
+    cyber_line("url", normalized)
+    cyber_line("tool", tool)
+    cyber_line("wordlist", str(selected_wordlist))
+    print("[i] Directory/content discovery is active traffic. Keep it inside authorized scope.")
+
+    if tool == "gobuster":
+        args = ["dir", "-u", normalized, "-w", str(selected_wordlist), "-t", str(threads), "--timeout", f"{int(timeout)}s"]
+        if extensions:
+            args.extend(["-x", extensions])
+        if status_codes:
+            args.extend(["-s", status_codes])
+        if output:
+            args.extend(["-o", output])
+    elif tool == "ffuf":
+        fuzz_url = normalized.rstrip("/") + "/FUZZ"
+        args = ["-u", fuzz_url, "-w", str(selected_wordlist), "-t", str(threads), "-rate", str(rate), "-mc", status_codes]
+        if extensions:
+            args.extend(["-e", extensions])
+        if output:
+            args.extend(["-o", output])
+    else:
+        args = [normalized, str(selected_wordlist)]
+        if extensions:
+            args.extend(["-X", extensions])
+        if output:
+            args.extend(["-o", output])
+        if status_codes:
+            print("[i] Dirb does not support the same status-code filter as Gobuster/FFUF; status filter ignored.")
+
+    return {
+        "url": normalized,
+        "wordlist": str(selected_wordlist),
+        "result": run_external_checked(tool, args, timeout=timeout + 30, install_missing=install_missing, package_manager=package_manager, dry_run=dry_run),
+    }
+
+
+def external_web_wrapper(
+    wrapper: str,
+    target: str,
+    tools_value: str | None,
+    timeout: float,
+    rate: int,
+    output: str | None,
+    install_missing: bool,
+    package_manager: str | None,
+    dry_run: bool,
+) -> dict[str, object]:
+    allowed = EXTERNAL_WRAPPER_TOOLS[wrapper]
+    selected_tools = split_tool_names(tools_value, allowed)
+    normalized_url = normalize_url(target) if wrapper in {"fingerprint", "tls-audit", "url-discovery", "web-scan", "js-audit"} else target_domain(target)
+    domain = target_domain(normalized_url)
+    host, port = target_port_from_url(normalized_url)
+
+    print_section(wrapper.replace("-", " "))
+    cyber_line("target", normalized_url)
+    cyber_line("tools", ", ".join(selected_tools))
+    print("[i] Wrapper mode: runs installed tools with conservative defaults; no exploitation or credential attacks.")
+
+    results: list[dict[str, object]] = []
+    for tool in selected_tools:
+        if wrapper == "fingerprint":
+            args = {
+                "whatweb": ["--no-errors", normalized_url],
+                "wafw00f": [normalized_url],
+                "httpx": ["-u", normalized_url, "-silent", "-title", "-tech-detect", "-status-code"],
+            }[tool]
+        elif wrapper == "tls-audit":
+            args = {
+                "testssl.sh": ["--fast", normalized_url],
+                "sslscan": [normalized_url],
+                "nmap": ["-sV", "--script", "ssl-enum-ciphers", "-p", str(port), host],
+            }[tool]
+        elif wrapper == "dns-enum":
+            args = {
+                "dnsrecon": ["-d", domain],
+                "subfinder": ["-d", domain, "-silent"],
+                "amass": ["enum", "-passive", "-d", domain],
+            }[tool]
+        elif wrapper == "url-discovery":
+            args = {
+                "waybackurls": [domain],
+                "gau": [domain],
+                "katana": ["-u", normalized_url, "-silent", "-d", "2", "-rl", str(rate)],
+            }[tool]
+        elif wrapper == "web-scan":
+            args = {
+                "nuclei": ["-u", normalized_url, "-rl", str(rate), "-severity", "low,medium,high,critical", "-silent"],
+                "nikto": ["-host", normalized_url, "-nointeractive"],
+            }[tool]
+        else:
+            args = []
+        if output and tool in {"httpx", "subfinder", "amass", "katana", "nuclei"}:
+            args.extend(["-o", output])
+        results.append(run_external_checked(tool, args, timeout, install_missing, package_manager, dry_run))
+
+    return {"wrapper": wrapper, "target": normalized_url, "tools": selected_tools, "results": results}
+
+
+def extract_javascript_urls(url: str, timeout: float) -> list[str]:
+    normalized = normalize_url(url)
+    status, _, body = http_request(normalized, method="GET", timeout=timeout)
+    if status >= 500:
+        print(f"[i] Page returned HTTP {status}; still checking any sampled body content.")
+    html = body.decode("utf-8", errors="ignore")
+    scripts = re.findall(r"<script[^>]+src=[\"']([^\"']+)[\"']", html, flags=re.I)
+    return sorted({urljoin(normalized, script) for script in scripts})
+
+
+def js_audit(
+    url: str,
+    tools_value: str | None,
+    output: str,
+    timeout: float,
+    install_missing: bool,
+    package_manager: str | None,
+    dry_run: bool,
+) -> dict[str, object]:
+    normalized = normalize_url(url)
+    selected_tools = split_tool_names(tools_value, EXTERNAL_WRAPPER_TOOLS["js-audit"])
+    output_dir = Path(output).expanduser()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print_section("JavaScript Audit")
+    cyber_line("url", normalized)
+    cyber_line("output", str(output_dir))
+    print("[i] Downloads same-page JavaScript assets for local dependency/secret-pattern review.")
+
+    script_urls = extract_javascript_urls(normalized, timeout=timeout)
+    downloaded: list[str] = []
+    for index, script_url in enumerate(script_urls[:50], start=1):
+        try:
+            _, _, body = http_request(script_url, method="GET", timeout=timeout)
+        except ConnectionError as error:
+            print(f"[skip] {script_url}: {error}")
+            continue
+        filename = output_dir / f"script-{index:03d}.js"
+        filename.write_bytes(body)
+        downloaded.append(str(filename))
+        print(f"[js] {script_url} -> {filename}")
+
+    tool_results = []
+    for tool in selected_tools:
+        args = {
+            "retire": ["--path", str(output_dir)],
+            "semgrep": ["--config", "auto", str(output_dir)],
+            "trufflehog": ["filesystem", str(output_dir), "--no-update"],
+        }[tool]
+        tool_results.append(run_external_checked(tool, args, timeout, install_missing, package_manager, dry_run))
+
+    return {"url": normalized, "scripts": script_urls, "downloaded": downloaded, "tools": selected_tools, "results": tool_results}
+
+
+def slugify_name(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", value.strip()).strip("-").lower()
+    return slug or "engagement"
+
+
+def lab_init(name: str, client: str, target: str, output_dir: str | None) -> dict[str, object]:
+    slug = slugify_name(name)
+    base_dir = Path(output_dir or f"engagements/{slug}").expanduser()
+    paths = {
+        "base": base_dir,
+        "evidence": base_dir / "evidence",
+        "findings": base_dir / "findings",
+        "reports": base_dir / "reports",
+        "scans": base_dir / "scans",
+        "notes": base_dir / "notes",
+    }
+    for path in paths.values():
+        path.mkdir(parents=True, exist_ok=True)
+
+    scope = {
+        "name": name,
+        "client": client,
+        "target": target,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "authorization": "lab/owned/written-scope target required before active tests",
+    }
+    (base_dir / "scope.json").write_text(json.dumps(scope, indent=2) + "\n", encoding="utf-8")
+    (base_dir / "notes" / "README.md").write_text(
+        f"# {name}\n\n- Client/lab: {client}\n- Target: {target}\n- Created UTC: {scope['created_at']}\n\n## Notes\n\n",
+        encoding="utf-8",
+    )
+    print_section("Lab Workspace")
+    print_key_value_table([(key, str(path)) for key, path in paths.items()])
+    return {"workspace": str(base_dir), "scope": scope, "paths": {key: str(path) for key, path in paths.items()}}
+
+
+def is_tryhackme_lab_target(target: str) -> bool:
+    try:
+        address = ipaddress.ip_address(target)
+        return address.is_private
+    except ValueError:
+        lowered = target.lower().strip(".")
+        return lowered.endswith(".thm") or lowered.endswith(".local") or lowered in {"localhost"}
+
+
+def tryhackme_workspace_paths(room: str, workspace: str | None) -> dict[str, Path]:
+    slug = slugify_name(room)
+    base_dir = Path(workspace or f"engagements/tryhackme-{slug}").expanduser()
+    return {
+        "base": base_dir,
+        "evidence": base_dir / "evidence",
+        "findings": base_dir / "findings",
+        "reports": base_dir / "reports",
+        "scans": base_dir / "scans",
+        "notes": base_dir / "notes",
+    }
+
+
+def tryhackme_vpn_check(interface: str | None = None) -> dict[str, object]:
+    selected_interface = interface or "tun0"
+    print_section("TryHackMe VPN Check")
+    cyber_line("interface", selected_interface)
+
+    commands = []
+    if find_tool("ip"):
+        commands.append(("ip_addr", ["ip", "addr", "show", selected_interface]))
+        commands.append(("ip_route", ["ip", "route"]))
+    elif find_tool("ifconfig"):
+        commands.append(("ifconfig", ["ifconfig", selected_interface]))
+        commands.append(("netstat", ["netstat", "-rn"]))
+    else:
+        print("[i] Neither ip nor ifconfig was found. Install net-tools or iproute2 to inspect VPN state.")
+
+    results: dict[str, object] = {"interface": selected_interface, "checks": {}}
+    vpn_seen = False
+    for name, command in commands:
+        path = find_tool(command[0])
+        if not path:
+            continue
+        actual_command = [path, *command[1:]]
+        result = run_external(actual_command, timeout=10)
+        output = result.stdout.strip() or result.stderr.strip()
+        results["checks"][name] = {
+            "command": actual_command,
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+        print(f"\n[{name}]")
+        print(output if output else "No output.")
+        if name in {"ip_addr", "ifconfig"} and result.returncode == 0 and selected_interface in output:
+            vpn_seen = True
+        if name in {"ip_route", "netstat"} and re.search(r"\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", output) and selected_interface in output:
+            vpn_seen = True
+
+    results["vpn_hint_seen"] = vpn_seen
+    if vpn_seen:
+        print("[OK] VPN interface/route hints were found.")
+    else:
+        print("[i] VPN hints were not obvious. Start your TryHackMe OpenVPN/WireGuard connection before scanning room targets.")
+    return results
+
+
+def write_tryhackme_runbook(paths: dict[str, Path], room: str, target: str, web_url: str | None) -> Path:
+    runbook = paths["notes"] / "tryhackme-runbook.md"
+    web_line = web_url or f"http://{target}"
+    lines = [
+        f"# TryHackMe Runbook: {room}",
+        "",
+        f"- Target: {target}",
+        f"- Web URL: {web_line}",
+        f"- Created UTC: {datetime.now(timezone.utc).isoformat()}",
+        "",
+        "## First Pass",
+        "",
+        "```bash",
+        f"ktool thm --room {shlex.quote(room)} --target {shlex.quote(target)} --yes-i-am-authorized",
+        f"ktool ports {shlex.quote(target)} --ports common --yes-i-am-authorized",
+        f"ktool nmap {shlex.quote(target)} --top-ports 1000 --scripts --yes-i-am-authorized",
+        f"ktool web {shlex.quote(web_line)} --yes-i-am-authorized",
+        f"ktool gobuster {shlex.quote(web_line)} --wordlist-kind directory-small --yes-i-am-authorized",
+        "```",
+        "",
+        "## Notes",
+        "",
+        "- Keep activity inside the active TryHackMe room scope.",
+        "- Save screenshots, command output, and findings under this workspace.",
+    ]
+    runbook.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return runbook
+
+
+def tryhackme_tool(
+    room: str,
+    target: str,
+    workspace: str | None,
+    interface: str | None,
+    ports: str,
+    web_url: str | None,
+    content_scan: bool,
+    content_tool: str,
+    dry_run: bool,
+    install_missing: bool,
+    package_manager: str | None,
+    allow_non_lab_target: bool,
+) -> dict[str, object]:
+    target = validate_host(target)
+    if not allow_non_lab_target and not is_tryhackme_lab_target(target):
+        raise ValueError("TryHackMe targets should be private lab IPs or .thm names. Use --allow-non-lab-target only for written-scope labs.")
+
+    paths = tryhackme_workspace_paths(room, workspace)
+    for path in paths.values():
+        path.mkdir(parents=True, exist_ok=True)
+
+    selected_web_url = normalize_url(web_url) if web_url else f"http://{target}"
+    scope = {
+        "name": room,
+        "client": "TryHackMe",
+        "target": target,
+        "web_url": selected_web_url,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "authorization": "TryHackMe room/lab target only",
+    }
+    (paths["base"] / "scope.json").write_text(json.dumps(scope, indent=2) + "\n", encoding="utf-8")
+    runbook = write_tryhackme_runbook(paths, room, target, selected_web_url)
+
+    print_section("TryHackMe Room")
+    print_key_value_table(
+        [
+            ("room", room),
+            ("target", target),
+            ("workspace", str(paths["base"])),
+            ("runbook", str(runbook)),
+            ("mode", "dry-run" if dry_run else "execute"),
+        ]
+    )
+
+    results: dict[str, object] = {
+        "workspace": str(paths["base"]),
+        "scope": scope,
+        "runbook": str(runbook),
+        "vpn": tryhackme_vpn_check(interface),
+        "commands": [],
+        "ports": [],
+        "web": None,
+        "content_discovery": None,
+    }
+
+    nmap_output = paths["scans"] / "nmap-initial.txt"
+    nmap_args = ["-sV", "-sC", "-T3", "-oN", str(nmap_output), target]
+    results["commands"].append({"tool": "nmap", "args": nmap_args})
+    print("\n[TryHackMe nmap first pass]")
+    nmap_result = run_external_checked(
+        "nmap",
+        nmap_args,
+        timeout=900.0,
+        install_missing=install_missing,
+        package_manager=package_manager,
+        dry_run=dry_run,
+    )
+    results["nmap"] = nmap_result
+
+    if dry_run:
+        print("\n[TryHackMe socket port check]")
+        print(f"python TCP check: ports={ports} target={target}")
+    else:
+        results["ports"] = [
+            asdict(item)
+            for item in port_scanner(
+                target=target,
+                ports=parse_ports(ports),
+                timeout=0.8,
+                workers=64,
+                delay=0.0,
+            )
+        ]
+
+    if dry_run:
+        print("\n[TryHackMe web baseline]")
+        print(f"ktool web {selected_web_url} --yes-i-am-authorized")
+    else:
+        try:
+            results["web"] = web_baseline(selected_web_url, timeout=5.0, delay=0.1)
+        except (ValueError, OSError, ConnectionError, TimeoutError) as error:
+            results["web"] = {"error": str(error)}
+            print(f"[i] Web baseline skipped/failed: {error}")
+
+    if content_scan:
+        content_output = paths["scans"] / "content-discovery.txt"
+        try:
+            results["content_discovery"] = content_discovery(
+                selected_web_url,
+                tool=content_tool,
+                wordlist=None,
+                wordlist_kind="directory-small",
+                extensions="txt,php,html",
+                status_codes="200,204,301,302,307,401,403",
+                threads=20,
+                rate=50,
+                timeout=180.0,
+                output=str(content_output),
+                install_missing=install_missing,
+                package_manager=package_manager,
+                dry_run=dry_run,
+            )
+        except (ValueError, OSError, ConnectionError, TimeoutError) as error:
+            results["content_discovery"] = {"error": str(error)}
+            print(f"[i] Content discovery skipped/failed: {error}")
+
+    return results
 
 
 def nmap_scan(
@@ -2265,8 +3064,8 @@ def permission_guide(tool: str | None = None) -> dict[str, object]:
     selected = tool or "all"
     guides: dict[str, list[str]] = {
         "sudo-su": [
-            "Use ktool sudo-su -- <command args> to relaunch one Ktool command through sudo.",
-            "Use ktool sudo-su with no command args to open the interactive menu as root.",
+            f"Use {TOOL_COMMAND} sudo-su -- <command args> to relaunch one {TOOL_NAME} command through sudo.",
+            f"Use {TOOL_COMMAND} sudo-su with no command args to open the interactive menu as root.",
             "This uses the operating system's sudo policy; it does not bypass authentication or permissions.",
         ],
         "capture": [
@@ -2299,7 +3098,7 @@ def permission_guide(tool: str | None = None) -> dict[str, object]:
 
     shown = guides if selected == "all" else {selected: guides[selected]}
     print_section("Permission Guide")
-    print("[i] Ktool will not bypass operating-system controls. Use approved admin privileges or capabilities.")
+    print(f"[i] {TOOL_NAME} will not bypass operating-system controls. Use approved admin privileges or capabilities.")
     for name, lines in shown.items():
         print(f"\n[{name}]")
         for line in lines:
@@ -2310,7 +3109,7 @@ def permission_guide(tool: str | None = None) -> dict[str, object]:
 def permission_error_message(operation: str, error: object | str) -> str:
     return (
         f"{operation} needs approved OS privileges: {error}\n"
-        "Ktool will not bypass permission controls. Run `ktool permission-guide` "
+        f"{TOOL_NAME} will not bypass permission controls. Run `{TOOL_COMMAND} permission-guide` "
         "for safe work-environment fixes."
     )
 
@@ -2357,7 +3156,7 @@ def sudo_su(ktool_args: list[str], dry_run: bool = False) -> dict[str, object]:
 
     print_section("Root Relaunch")
     cyber_line("command", " ".join(shlex.quote(part) for part in command))
-    print("[i] This uses approved sudo policy. Ktool does not bypass authentication or OS permissions.")
+    print(f"[i] This uses approved sudo policy. {TOOL_NAME} does not bypass authentication or OS permissions.")
 
     if dry_run:
         return {
@@ -3479,6 +4278,315 @@ def local_posture() -> dict[str, object]:
     return checks
 
 
+def vps_ssh_base(host: str, port: int, identity: str | None) -> list[str]:
+    if port < 1 or port > 65535:
+        raise ValueError("--ssh-port must be between 1 and 65535.")
+    command = ["ssh", "-p", str(port), "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+    if identity:
+        command.extend(["-i", str(Path(identity).expanduser())])
+    command.append(host)
+    return command
+
+
+def run_vps_script(
+    label: str,
+    script: str,
+    host: str | None,
+    ssh_port: int,
+    identity: str | None,
+    timeout: float,
+    dry_run: bool,
+) -> dict[str, object]:
+    if host:
+        ssh_path = find_tool("ssh")
+        if not ssh_path and not dry_run:
+            raise ValueError("ssh is not installed. Install OpenSSH client or run local VPS checks on the server.")
+        command = vps_ssh_base(host, ssh_port, identity)
+        command[0] = ssh_path or "ssh"
+        command.append(script)
+    else:
+        command = ["sh", "-lc", script]
+
+    print(f"\n[{label}]")
+    print(color("$ " + " ".join(shlex.quote(part) for part in command), "90"))
+    if dry_run:
+        return {"label": label, "command": command, "executed": False}
+
+    result = run_external(command, timeout=timeout)
+    output = result.stdout.strip() or result.stderr.strip()
+    if output:
+        if len(output) > 6000:
+            print(output[:6000] + "\n[i] Output truncated in console; full output is available in JSON report.")
+        else:
+            print(output)
+    else:
+        print("No output.")
+    return {
+        "label": label,
+        "command": command,
+        "executed": True,
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+
+
+def shell_list(values: list[str]) -> str:
+    return " ".join(shlex.quote(value) for value in values)
+
+
+def print_vps_banner() -> None:
+    width = 70
+    border = "+" + "-" * width + "+"
+    print()
+    print(color(border, "1;34"))
+    print(color("|", "1;34") + color(" VPS CONTROL CENTER ".center(width), "1;34") + color("|", "1;34"))
+    print(color("|", "1;34") + color(" login | health | storage | usage | pm2 | logs | ls ".center(width), "36") + color("|", "1;34"))
+    print(color("|", "1;34") + color(" read-only checks unless you explicitly open ssh login ".center(width), "90") + color("|", "1;34"))
+    print(color(border, "1;34"))
+
+
+def print_vps_menu() -> None:
+    items = [
+        ("1", "VPS Login Command"),
+        ("2", "VPS Full Checker"),
+        ("3", "VPS Storage Checker"),
+        ("4", "VPS Usage Checker"),
+        ("5", "PM2 Checker"),
+        ("6", "Directory List / Size"),
+        ("7", "Service Checker"),
+        ("8", "Log Checker"),
+        ("9", "Docker Checker"),
+        ("10", "Back"),
+    ]
+    width = 70
+    border = "+" + "-" * width + "+"
+    print(color(border, "1;34"))
+    for number, label in items:
+        print(color("|", "1;34") + f" [{number.rjust(2)}] {label}".ljust(width) + color("|", "1;34"))
+    print(color(border, "1;34"))
+
+
+def prompt_vps_connection() -> tuple[str | None, int, str | None]:
+    host = input("VPS SSH host [blank for local checks]: ").strip() or None
+    ssh_port = int(input("SSH port [22]: ").strip() or "22")
+    identity = input("SSH identity file [optional]: ").strip() or None
+    return host, ssh_port, identity
+
+
+def vps_login_command(host: str, ssh_port: int, identity: str | None, connect: bool = False) -> dict[str, object]:
+    if not host:
+        raise ValueError("VPS login needs --host, for example root@203.0.113.10.")
+    ssh_path = find_tool("ssh") or "ssh"
+    command = vps_ssh_base(host, ssh_port, identity)
+    command[0] = ssh_path
+
+    print_vps_banner()
+    print_section("VPS Login")
+    cyber_line("host", host)
+    cyber_line("command", " ".join(shlex.quote(part) for part in command))
+    if not connect:
+        print("[i] Login command preview only. Add --connect to open an interactive SSH session.")
+        return {"host": host, "command": command, "connected": False}
+
+    print("[i] Opening interactive SSH session. Exit SSH to return to your shell.")
+    result = subprocess.run(command, check=False)
+    return {"host": host, "command": command, "connected": True, "returncode": result.returncode}
+
+
+def vps_check(
+    host: str | None,
+    ssh_port: int,
+    identity: str | None,
+    paths: list[str] | None,
+    services: list[str] | None,
+    include_pm2: bool,
+    include_logs: bool,
+    include_docker: bool,
+    timeout: float,
+    dry_run: bool,
+    check_types: list[str] | None = None,
+) -> dict[str, object]:
+    if timeout < 3 or timeout > 600:
+        raise ValueError("--timeout must be between 3 and 600 seconds.")
+    allowed_checks = {"summary", "storage", "usage", "network", "ls", "services", "pm2", "logs", "docker"}
+    default_checks = ["summary", "storage", "usage", "network", "ls", "services"]
+    if include_pm2:
+        default_checks.append("pm2")
+    if include_logs:
+        default_checks.append("logs")
+    if include_docker:
+        default_checks.append("docker")
+    selected_checks = check_types or default_checks
+    unknown_checks = [item for item in selected_checks if item not in allowed_checks]
+    if unknown_checks:
+        raise ValueError(f"Unknown VPS check type(s): {', '.join(unknown_checks)}")
+
+    selected_paths = paths or ["/", "/var/www", "/home", "/root", "/etc/nginx/sites-enabled"]
+    selected_services = services or ["nginx", "apache2", "pm2", "docker", "postgresql", "mysql", "redis-server"]
+    target = host or "local host"
+
+    print_vps_banner()
+    print_section("VPS Health Check")
+    print_key_value_table(
+        [
+            ("target", target),
+            ("mode", "ssh" if host else "local"),
+            ("checks", ", ".join(selected_checks)),
+            ("pm2", "enabled" if include_pm2 else "skipped"),
+            ("docker", "enabled" if include_docker else "skipped"),
+            ("logs", "enabled" if include_logs else "skipped"),
+            ("dry run", str(dry_run)),
+        ]
+    )
+    print("[i] VPS checks are read-only: no restarts, deletes, package changes, or config edits.")
+
+    path_text = shell_list(selected_paths)
+    service_text = shell_list(selected_services)
+    scripts: list[tuple[str, str, str]] = [
+        (
+            "summary",
+            "system summary",
+            "printf 'Host: '; hostname; printf 'User: '; whoami; "
+            "printf 'Kernel: '; uname -a; printf 'Uptime: '; uptime; "
+            "printf '\\nOS release:\\n'; cat /etc/os-release 2>/dev/null | sed -n '1,8p' || true",
+        ),
+        (
+            "storage",
+            "storage and inodes",
+            "printf 'Disk usage:\\n'; df -hT 2>/dev/null || df -h; "
+            "printf '\\nInodes:\\n'; df -ih 2>/dev/null || true",
+        ),
+        (
+            "usage",
+            "memory and cpu",
+            "printf 'Memory:\\n'; (free -h 2>/dev/null || vm_stat 2>/dev/null || true); "
+            "printf '\\nTop processes by memory:\\n'; ps aux 2>/dev/null | sort -nrk 4 | head -15; "
+            "printf '\\nTop processes by cpu:\\n'; ps aux 2>/dev/null | sort -nrk 3 | head -15",
+        ),
+        (
+            "network",
+            "network listeners",
+            "if command -v ss >/dev/null 2>&1; then ss -tulpn; "
+            "elif command -v netstat >/dev/null 2>&1; then netstat -tulpn 2>/dev/null || netstat -an; "
+            "else echo 'ss/netstat not found'; fi",
+        ),
+        (
+            "ls",
+            "directory inventory",
+            f"for p in {path_text}; do printf '\\n## %s\\n' \"$p\"; "
+            "ls -lah \"$p\" 2>&1 | sed -n '1,80p'; "
+            "printf 'size: '; du -sh \"$p\" 2>/dev/null || true; done",
+        ),
+        (
+            "services",
+            "service status",
+            f"if command -v systemctl >/dev/null 2>&1; then "
+            f"for svc in {service_text}; do printf '\\n## %s\\n' \"$svc\"; "
+            "systemctl --no-pager --full status \"$svc\" 2>&1 | sed -n '1,35p'; done; "
+            "else echo 'systemctl not found'; fi",
+        ),
+    ]
+
+    if include_pm2:
+        scripts.append(
+            (
+                "pm2",
+                "pm2 processes",
+                "if command -v pm2 >/dev/null 2>&1; then pm2 list; "
+                "printf '\\nPM2 startup info:\\n'; pm2 startup 2>/dev/null | sed -n '1,20p' || true; "
+                "else echo 'pm2 not found'; fi",
+            )
+        )
+    if include_logs:
+        scripts.append(
+            (
+                "logs",
+                "recent logs",
+                "printf 'System warnings/errors:\\n'; "
+                "(journalctl -p warning -n 80 --no-pager 2>/dev/null || tail -n 80 /var/log/syslog 2>/dev/null || true); "
+                "printf '\\nAuth log sample:\\n'; "
+                "(tail -n 80 /var/log/auth.log 2>/dev/null || tail -n 80 /var/log/secure 2>/dev/null || true); "
+                "if command -v pm2 >/dev/null 2>&1; then printf '\\nPM2 logs:\\n'; pm2 logs --lines 60 --nostream 2>&1; fi",
+            )
+        )
+    if include_docker:
+        scripts.append(
+            (
+                "docker",
+                "docker status",
+                "if command -v docker >/dev/null 2>&1; then docker ps --format 'table {{.Names}}\\t{{.Image}}\\t{{.Status}}\\t{{.Ports}}'; "
+                "printf '\\nDocker disk usage:\\n'; docker system df 2>&1; "
+                "else echo 'docker not found'; fi",
+            )
+        )
+
+    results = [
+        run_vps_script(
+            label,
+            script,
+            host=host,
+            ssh_port=ssh_port,
+            identity=identity,
+            timeout=timeout,
+            dry_run=dry_run,
+        )
+        for check_type, label, script in scripts
+        if check_type in selected_checks
+    ]
+    return {
+        "target": target,
+        "mode": "ssh" if host else "local",
+        "paths": selected_paths,
+        "services": selected_services,
+        "include_pm2": include_pm2,
+        "include_logs": include_logs,
+        "include_docker": include_docker,
+        "check_types": selected_checks,
+        "dry_run": dry_run,
+        "checks": results,
+    }
+
+
+def vps_console() -> None:
+    print_vps_banner()
+    host, ssh_port, identity = prompt_vps_connection()
+    while True:
+        print_vps_menu()
+        choice = input(color("vps> ", "1;34")).strip()
+        try:
+            if choice == "1":
+                if not host:
+                    host, ssh_port, identity = prompt_vps_connection()
+                vps_login_command(host, ssh_port, identity, connect=False)
+            elif choice == "2":
+                vps_check(host, ssh_port, identity, None, None, True, include_logs=False, include_docker=False, timeout=30.0, dry_run=False)
+            elif choice == "3":
+                vps_check(host, ssh_port, identity, None, None, False, include_logs=False, include_docker=False, timeout=30.0, dry_run=False, check_types=["storage"])
+            elif choice == "4":
+                vps_check(host, ssh_port, identity, None, None, False, include_logs=False, include_docker=False, timeout=30.0, dry_run=False, check_types=["summary", "usage", "network"])
+            elif choice == "5":
+                vps_check(host, ssh_port, identity, None, None, True, include_logs=False, include_docker=False, timeout=30.0, dry_run=False, check_types=["pm2"])
+            elif choice == "6":
+                path_text = input("Directories [/var/www,/home,/root]: ").strip()
+                paths = [item.strip() for item in path_text.split(",") if item.strip()] if path_text else ["/var/www", "/home", "/root"]
+                vps_check(host, ssh_port, identity, paths, None, False, include_logs=False, include_docker=False, timeout=30.0, dry_run=False, check_types=["ls"])
+            elif choice == "7":
+                service_text = input("Services [nginx,pm2,docker]: ").strip()
+                services = [item.strip() for item in service_text.split(",") if item.strip()] if service_text else ["nginx", "pm2", "docker"]
+                vps_check(host, ssh_port, identity, None, services, False, include_logs=False, include_docker=False, timeout=30.0, dry_run=False, check_types=["services"])
+            elif choice == "8":
+                vps_check(host, ssh_port, identity, None, None, True, include_logs=True, include_docker=False, timeout=30.0, dry_run=False, check_types=["logs"])
+            elif choice == "9":
+                vps_check(host, ssh_port, identity, None, None, False, include_logs=False, include_docker=True, timeout=30.0, dry_run=False, check_types=["docker"])
+            elif choice == "10":
+                return
+            else:
+                print("Invalid VPS option.")
+        except (ValueError, OSError, ConnectionError, TimeoutError) as error:
+            print(f"[ERROR] {error}")
+
+
 def find_suid_files(roots: list[str]) -> list[str]:
     found: list[str] = []
     for root in roots:
@@ -3545,9 +4653,9 @@ def print_roadmap(category: str | None = None) -> dict[str, object]:
     if unknown:
         raise ValueError(f"Unknown category: {', '.join(unknown)}")
 
-    print("\n=== Ktool Learning Roadmap ===")
+    print(f"\n=== {TOOL_NAME} Skill Roadmap ===")
     print("Use every active test only on owned systems, written-scope targets, or labs.")
-    print("Ktool does not automate brute force, phishing, persistence, or exploitation.")
+    print(f"{TOOL_NAME} does not automate brute force, phishing, persistence, or exploitation.")
 
     payload: dict[str, object] = {}
     for key in selected_keys:
@@ -3584,6 +4692,7 @@ def save_report(path: str | None, command: str, data: Iterable[object] | object)
     payload = {
         "tool": TOOL_NAME,
         "owner": TOOL_OWNER,
+        "tagline": TOOL_TAGLINE,
         "command": command,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "data": payload_data,
@@ -3600,19 +4709,19 @@ def save_report(path: str | None, command: str, data: Iterable[object] | object)
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Ktool ethical security assessment tool for Linux.",
+        description=f"{TOOL_NAME}: {TOOL_TAGLINE}.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "--yes-i-am-authorized",
         action="store_true",
-        help="Confirm you have permission to test the target.",
+        help="Confirm this target is in scope for a lab, owned system, or written authorization.",
     )
     parser.add_argument("--report", help="Write JSON report to this path.")
 
     subparsers = parser.add_subparsers(dest="command")
 
-    roadmap_parser = subparsers.add_parser("roadmap", help="Show Ktool learning coverage.")
+    roadmap_parser = subparsers.add_parser("roadmap", help="Show the skill roadmap and tool coverage.")
     roadmap_parser.add_argument(
         "--category",
         choices=sorted(TOOL_CATEGORIES),
@@ -3656,13 +4765,19 @@ def build_parser() -> argparse.ArgumentParser:
     install_parser.add_argument("--execute", action="store_true", help="Run the install command.")
     install_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
-    sudo_parser = subparsers.add_parser("sudo-su", help="Relaunch Ktool through sudo for approved root access.")
+    install_many_parser = subparsers.add_parser("install-tools", help="Install package-manager tools for a workflow category.")
+    install_many_parser.add_argument("--category", required=True, choices=sorted(TOOL_CATEGORIES), help="Tool category to install.")
+    install_many_parser.add_argument("--manager", choices=["apt", "dnf", "pacman", "brew"], help="Package manager to use.")
+    install_many_parser.add_argument("--execute", action="store_true", help="Run install commands. Omit for dry-run.")
+    install_many_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    sudo_parser = subparsers.add_parser("sudo-su", help=f"Relaunch {TOOL_NAME} through sudo for approved root access.")
     sudo_parser.add_argument("--dry-run", action="store_true", help="Print the sudo command without running it.")
     sudo_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
     sudo_parser.add_argument(
         "ktool_args",
         nargs=argparse.REMAINDER,
-        help="Ktool command args to run as root. Use -- before the command, or omit for the root menu.",
+        help=f"{TOOL_COMMAND} command args to run as root. Use -- before the command, or omit for the root menu.",
     )
 
     hatch_parser = subparsers.add_parser("hatch", help="Run the Hatch Python project/tooling CLI.")
@@ -3738,6 +4853,121 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run Nikto if installed. This is an active scanner.",
     )
     web_vuln_parser.add_argument("--nikto-timeout", type=float, default=180.0, help="Nikto timeout in seconds.")
+
+    examples_parser = subparsers.add_parser("external-examples", help="Show real-world lab wrapper examples.")
+    examples_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    seclists_parser = subparsers.add_parser("seclists-find", help="Find installed SecLists roots and common wordlists.")
+    seclists_parser.add_argument("--category", choices=sorted(SECLISTS_WORDLISTS), help="Show one wordlist category.")
+    seclists_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    content_parser = subparsers.add_parser(
+        "content-discovery",
+        aliases=["gobuster", "ffuf", "dirb"],
+        help="Run Gobuster, FFUF, or Dirb against an authorized web target.",
+    )
+    add_common_run_options(content_parser)
+    add_install_options(content_parser)
+    content_parser.add_argument("url", help="Base URL to enumerate.")
+    content_parser.add_argument("--tool", choices=["gobuster", "ffuf", "dirb"], help="External tool to run. Alias commands choose this automatically.")
+    content_parser.add_argument("--wordlist", help="Path to a web content wordlist.")
+    content_parser.add_argument("--wordlist-kind", choices=sorted(SECLISTS_WORDLISTS), default="directory-small", help="SecLists wordlist kind when --wordlist is omitted.")
+    content_parser.add_argument("--extensions", help="Comma-separated extensions, for example php,txt,bak.")
+    content_parser.add_argument("--status-codes", default="200,204,301,302,307,401,403", help="Interesting HTTP status codes.")
+    content_parser.add_argument("--threads", type=int, default=20, help="Worker threads.")
+    content_parser.add_argument("--rate", type=int, default=50, help="FFUF request rate limit.")
+    content_parser.add_argument("--timeout", type=float, default=120.0, help="Command timeout in seconds.")
+    content_parser.add_argument("--output", help="Optional external-tool output file.")
+    content_parser.add_argument("--dry-run", action="store_true", help="Print the command without running it.")
+
+    fingerprint_parser = subparsers.add_parser("fingerprint", help="Run installed web fingerprinting tools.")
+    add_common_run_options(fingerprint_parser)
+    add_install_options(fingerprint_parser)
+    fingerprint_parser.add_argument("target", help="Authorized URL to fingerprint.")
+    fingerprint_parser.add_argument("--tools", default="whatweb,wafw00f,httpx", help="Comma-separated tools.")
+    fingerprint_parser.add_argument("--timeout", type=float, default=120.0, help="Per-tool timeout in seconds.")
+    fingerprint_parser.add_argument("--rate", type=int, default=20, help="Reserved for compatible tools.")
+    fingerprint_parser.add_argument("--output", help="Optional output path for tools that support -o.")
+    fingerprint_parser.add_argument("--dry-run", action="store_true", help="Print commands without running them.")
+
+    tls_audit_parser = subparsers.add_parser("tls-audit", help="Run installed TLS review tools.")
+    add_common_run_options(tls_audit_parser)
+    add_install_options(tls_audit_parser)
+    tls_audit_parser.add_argument("target", help="Authorized HTTPS URL or host.")
+    tls_audit_parser.add_argument("--tools", default="testssl.sh,sslscan", help="Comma-separated tools.")
+    tls_audit_parser.add_argument("--timeout", type=float, default=300.0, help="Per-tool timeout in seconds.")
+    tls_audit_parser.add_argument("--rate", type=int, default=20, help="Reserved for compatible tools.")
+    tls_audit_parser.add_argument("--output", help="Optional output path for tools that support -o.")
+    tls_audit_parser.add_argument("--dry-run", action="store_true", help="Print commands without running them.")
+
+    dns_enum_parser = subparsers.add_parser("dns-enum", help="Run passive/low-noise DNS enumeration tools.")
+    add_common_run_options(dns_enum_parser)
+    add_install_options(dns_enum_parser)
+    dns_enum_parser.add_argument("target", help="Authorized domain.")
+    dns_enum_parser.add_argument("--tools", default="dnsrecon,subfinder,amass", help="Comma-separated tools.")
+    dns_enum_parser.add_argument("--timeout", type=float, default=300.0, help="Per-tool timeout in seconds.")
+    dns_enum_parser.add_argument("--rate", type=int, default=20, help="Reserved for compatible tools.")
+    dns_enum_parser.add_argument("--output", help="Optional output path for tools that support -o.")
+    dns_enum_parser.add_argument("--dry-run", action="store_true", help="Print commands without running them.")
+
+    url_discovery_parser = subparsers.add_parser("url-discovery", help="Run URL discovery/crawling tools.")
+    add_common_run_options(url_discovery_parser)
+    add_install_options(url_discovery_parser)
+    url_discovery_parser.add_argument("target", help="Authorized URL or domain.")
+    url_discovery_parser.add_argument("--tools", default="waybackurls,gau,katana", help="Comma-separated tools.")
+    url_discovery_parser.add_argument("--timeout", type=float, default=300.0, help="Per-tool timeout in seconds.")
+    url_discovery_parser.add_argument("--rate", type=int, default=20, help="Rate limit for compatible tools.")
+    url_discovery_parser.add_argument("--output", help="Optional output path for tools that support -o.")
+    url_discovery_parser.add_argument("--dry-run", action="store_true", help="Print commands without running them.")
+
+    web_scan_parser = subparsers.add_parser("web-scan", help="Run installed safe web scan tools such as nuclei or nikto.")
+    add_common_run_options(web_scan_parser)
+    add_install_options(web_scan_parser)
+    web_scan_parser.add_argument("target", help="Authorized URL.")
+    web_scan_parser.add_argument("--tool", choices=EXTERNAL_WRAPPER_TOOLS["web-scan"], default="nuclei", help="Tool to run.")
+    web_scan_parser.add_argument("--rate", type=int, default=20, help="Rate limit for compatible tools.")
+    web_scan_parser.add_argument("--timeout", type=float, default=300.0, help="Command timeout in seconds.")
+    web_scan_parser.add_argument("--output", help="Optional output path for tools that support -o.")
+    web_scan_parser.add_argument("--dry-run", action="store_true", help="Print command without running it.")
+
+    js_audit_parser = subparsers.add_parser("js-audit", help="Download page JavaScript and run local audit tools.")
+    add_common_run_options(js_audit_parser)
+    add_install_options(js_audit_parser)
+    js_audit_parser.add_argument("url", help="Authorized URL to inspect.")
+    js_audit_parser.add_argument("--tools", default="retire,semgrep,trufflehog", help="Comma-separated local audit tools.")
+    js_audit_parser.add_argument("--output", default="js-downloads", help="Directory for downloaded JavaScript files.")
+    js_audit_parser.add_argument("--browser", action="store_true", help=f"Accepted for workflow compatibility; {TOOL_NAME} uses static HTML extraction.")
+    js_audit_parser.add_argument("--timeout", type=float, default=120.0, help="Network and per-tool timeout in seconds.")
+    js_audit_parser.add_argument("--dry-run", action="store_true", help="Print audit commands after downloading scripts.")
+
+    lab_parser = subparsers.add_parser(
+        "lab-init",
+        aliases=["engagement-init"],
+        help="Create a lab/engagement workspace with evidence, scan, finding, and report folders.",
+    )
+    lab_parser.add_argument("name", help="Lab, room, or engagement name.")
+    lab_parser.add_argument("--client", default="lab", help="Client or lab provider name.")
+    lab_parser.add_argument("--target", required=True, help="Primary authorized target.")
+    lab_parser.add_argument("--output-dir", help="Workspace directory. Defaults to engagements/<name>.")
+    lab_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    thm_parser = subparsers.add_parser(
+        "tryhackme",
+        aliases=["thm"],
+        help="Create a TryHackMe room workspace and run safe first-pass lab enumeration.",
+    )
+    add_common_run_options(thm_parser)
+    add_install_options(thm_parser)
+    thm_parser.add_argument("--room", required=True, help="TryHackMe room name.")
+    thm_parser.add_argument("--target", required=True, help="Room target IP or .thm hostname.")
+    thm_parser.add_argument("--workspace", help="Workspace directory. Defaults to engagements/tryhackme-<room>.")
+    thm_parser.add_argument("--interface", default="tun0", help="VPN interface to inspect.")
+    thm_parser.add_argument("--ports", default="common", help="Python TCP port set: common, 22,80,443, or 1-1024.")
+    thm_parser.add_argument("--web-url", help="Web URL. Defaults to http://<target>.")
+    thm_parser.add_argument("--content-scan", action="store_true", help="Run content discovery using SecLists if available.")
+    thm_parser.add_argument("--content-tool", choices=["gobuster", "ffuf", "dirb"], default="gobuster", help="Content discovery tool for --content-scan.")
+    thm_parser.add_argument("--dry-run", action="store_true", help="Create workspace and print external commands without active scans.")
+    thm_parser.add_argument("--allow-non-lab-target", action="store_true", help="Allow a non-private/non-.thm target when you have written scope.")
 
     shodan_parser = subparsers.add_parser("shodan", help="Run a passive Shodan host intelligence lookup.")
     add_common_run_options(shodan_parser)
@@ -3908,6 +5138,58 @@ def build_parser() -> argparse.ArgumentParser:
     posture_parser = subparsers.add_parser("local-posture", help="Run local defensive privilege-risk checks.")
     posture_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
+    vps_parser = subparsers.add_parser(
+        "vps-check",
+        aliases=["vps", "vps-health"],
+        help="Run read-only VPS health checks locally or over SSH.",
+    )
+    vps_parser.add_argument("--host", help="SSH target such as root@203.0.113.10. Omit to check the local host.")
+    vps_parser.add_argument("--ssh-port", type=int, default=22, help="SSH port for --host.")
+    vps_parser.add_argument("--identity", help="SSH private key path for --host.")
+    vps_parser.add_argument("--path", action="append", help="Directory to list and size-check. Can be used more than once.")
+    vps_parser.add_argument("--service", action="append", help="systemd service to inspect. Can be used more than once.")
+    vps_parser.add_argument("--no-pm2", action="store_false", dest="include_pm2", help="Skip PM2 process checks.")
+    vps_parser.add_argument("--logs", action="store_true", help="Include recent system/auth/PM2 logs.")
+    vps_parser.add_argument("--docker", action="store_true", help="Include Docker container and disk checks.")
+    vps_parser.add_argument(
+        "--only",
+        action="append",
+        choices=["summary", "storage", "usage", "network", "ls", "services", "pm2", "logs", "docker"],
+        help="Run only this VPS check type. Can be used more than once.",
+    )
+    vps_parser.add_argument("--timeout", type=float, default=30.0, help="Timeout per check in seconds.")
+    vps_parser.add_argument("--dry-run", action="store_true", help="Print the local/SSH commands without running checks.")
+    vps_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    vps_ui_parser = subparsers.add_parser("vps-ui", aliases=["vps-menu"], help="Open the blue VPS control center.")
+    vps_ui_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    vps_login_parser = subparsers.add_parser("vps-login", help="Show or open an SSH login command for a VPS.")
+    vps_login_parser.add_argument("--host", required=True, help="SSH target such as root@203.0.113.10.")
+    vps_login_parser.add_argument("--ssh-port", type=int, default=22, help="SSH port.")
+    vps_login_parser.add_argument("--identity", help="SSH private key path.")
+    vps_login_parser.add_argument("--connect", action="store_true", help="Open the SSH session instead of previewing the command.")
+    vps_login_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    for command_name, help_text in {
+        "vps-storage": "Run VPS storage and inode checks.",
+        "vps-usage": "Run VPS CPU, memory, uptime, and listener checks.",
+        "vps-pm2": "Run VPS PM2 process checks.",
+        "vps-ls": "List and size-check VPS directories.",
+        "vps-services": "Inspect VPS systemd services.",
+        "vps-logs": "Show recent VPS system/auth/PM2 logs.",
+        "vps-docker": "Show Docker containers and Docker disk usage.",
+    }.items():
+        subparser = subparsers.add_parser(command_name, help=help_text)
+        subparser.add_argument("--host", help="SSH target such as root@203.0.113.10. Omit to check the local host.")
+        subparser.add_argument("--ssh-port", type=int, default=22, help="SSH port for --host.")
+        subparser.add_argument("--identity", help="SSH private key path for --host.")
+        subparser.add_argument("--path", action="append", help="Directory to list and size-check. Can be used more than once.")
+        subparser.add_argument("--service", action="append", help="systemd service to inspect. Can be used more than once.")
+        subparser.add_argument("--timeout", type=float, default=30.0, help="Timeout per check in seconds.")
+        subparser.add_argument("--dry-run", action="store_true", help="Print the local/SSH commands without running checks.")
+        subparser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
     permission_parser = subparsers.add_parser("permission-guide", help="Show safe fixes for Operation not permitted errors.")
     permission_parser.add_argument(
         "tool",
@@ -3926,7 +5208,7 @@ def add_common_run_options(command_parser: argparse.ArgumentParser) -> None:
         "--yes-i-am-authorized",
         action="store_true",
         default=argparse.SUPPRESS,
-        help="Confirm you have permission to test the target.",
+        help="Confirm this target is in scope for a lab, owned system, or written authorization.",
     )
     command_parser.add_argument(
         "--report",
@@ -4052,7 +5334,7 @@ def interactive_menu() -> None:
                     no_ambiguous=True,
                 )
             elif choice == "17":
-                command_text = input("Ktool args to run as root [blank for root menu]: ").strip()
+                command_text = input(f"{TOOL_COMMAND} args to run as root [blank for root menu]: ").strip()
                 sudo_su(shlex.split(command_text), dry_run=False)
             elif choice == "18":
                 tool = input("Tool (all/sudo-su/capture/scapy-sniff/lan-scan/nmap/ncat-chat) [all]: ").strip() or "all"
@@ -4154,6 +5436,60 @@ def interactive_menu() -> None:
                 path = input("APK, decompiled APK folder, or repo path: ").strip()
                 mobile_artifact_audit(path, max_files=800, max_bytes=250000, include_all_iocs=False)
             elif choice == "39":
+                print_external_examples()
+            elif choice == "40":
+                category = input(f"SecLists category ({', '.join(sorted(SECLISTS_WORDLISTS))}) [all]: ").strip() or None
+                seclists_find(category)
+            elif choice == "41":
+                url = input("Base URL (https://example.com): ").strip()
+                tool = input("Tool (gobuster/ffuf/dirb) [gobuster]: ").strip() or "gobuster"
+                wordlist = input("Wordlist path [auto SecLists directory-small]: ").strip() or None
+                dry_run = input("Dry run only? [y/N]: ").strip().lower() in {"y", "yes"}
+                content_discovery(
+                    url,
+                    tool=tool,
+                    wordlist=wordlist,
+                    wordlist_kind="directory-small",
+                    extensions=None,
+                    status_codes="200,204,301,302,307,401,403",
+                    threads=20,
+                    rate=50,
+                    timeout=120.0,
+                    output=None,
+                    install_missing=False,
+                    package_manager=None,
+                    dry_run=dry_run,
+                )
+            elif choice == "42":
+                name = input("Lab/engagement name: ").strip()
+                client = input("Client/lab provider [lab]: ").strip() or "lab"
+                target = input("Primary target: ").strip()
+                output_dir = input("Output directory [engagements/<name>]: ").strip() or None
+                lab_init(name=name, client=client, target=target, output_dir=output_dir)
+            elif choice == "43":
+                room = input("TryHackMe room name: ").strip()
+                target = input("Room target IP/host: ").strip()
+                web_url = input(f"Web URL [http://{target}]: ").strip() or None
+                content_scan = input("Run content discovery too? [y/N]: ").strip().lower() in {"y", "yes"}
+                content_tool = input("Content tool (gobuster/ffuf/dirb) [gobuster]: ").strip() or "gobuster"
+                dry_run = input("Dry run only? [y/N]: ").strip().lower() in {"y", "yes"}
+                tryhackme_tool(
+                    room=room,
+                    target=target,
+                    workspace=None,
+                    interface=None,
+                    ports="common",
+                    web_url=web_url,
+                    content_scan=content_scan,
+                    content_tool=content_tool,
+                    dry_run=dry_run,
+                    install_missing=False,
+                    package_manager=None,
+                    allow_non_lab_target=False,
+                )
+            elif choice == "44":
+                vps_console()
+            elif choice == "45":
                 print_exit_screen("Session closed from the interactive menu.", 0)
                 break
             else:
@@ -4179,6 +5515,8 @@ def main(argv: list[str] | None = None) -> int:
             results = print_install_hints(args.tool)
         elif args.command == "install-tool":
             results = install_system_tool(args.tool, manager=args.manager, execute=args.execute)
+        elif args.command == "install-tools":
+            results = install_tools_for_category(args.category, manager=args.manager, execute=args.execute)
         elif args.command == "sudo-su":
             results = sudo_su(args.ktool_args, dry_run=args.dry_run)
         elif args.command == "hatch":
@@ -4187,6 +5525,33 @@ def main(argv: list[str] | None = None) -> int:
                 install_missing=args.install_missing,
                 timeout=args.timeout,
                 dry_run=args.dry_run,
+            )
+        elif args.command == "external-examples":
+            results = print_external_examples()
+        elif args.command == "seclists-find":
+            results = seclists_find(args.category)
+        elif args.command in {"lab-init", "engagement-init"}:
+            results = lab_init(
+                name=args.name,
+                client=args.client,
+                target=args.target,
+                output_dir=args.output_dir,
+            )
+        elif args.command in {"tryhackme", "thm"}:
+            require_authorization(args.yes_i_am_authorized)
+            results = tryhackme_tool(
+                room=args.room,
+                target=args.target,
+                workspace=args.workspace,
+                interface=args.interface,
+                ports=args.ports,
+                web_url=args.web_url,
+                content_scan=args.content_scan,
+                content_tool=args.content_tool,
+                dry_run=args.dry_run,
+                install_missing=args.install_missing,
+                package_manager=args.package_manager,
+                allow_non_lab_target=args.allow_non_lab_target,
             )
         elif args.command == "password-audit":
             results = password_audit(
@@ -4221,6 +5586,53 @@ def main(argv: list[str] | None = None) -> int:
             results = awareness_plan(args.company, args.audience)
         elif args.command == "local-posture":
             results = local_posture()
+        elif args.command in {"vps-check", "vps", "vps-health"}:
+            results = vps_check(
+                host=args.host,
+                ssh_port=args.ssh_port,
+                identity=args.identity,
+                paths=args.path,
+                services=args.service,
+                include_pm2=args.include_pm2,
+                include_logs=args.logs,
+                include_docker=args.docker,
+                timeout=args.timeout,
+                dry_run=args.dry_run,
+                check_types=args.only,
+            )
+        elif args.command in {"vps-ui", "vps-menu"}:
+            vps_console()
+            results = {"opened": "vps-ui"}
+        elif args.command == "vps-login":
+            results = vps_login_command(
+                host=args.host,
+                ssh_port=args.ssh_port,
+                identity=args.identity,
+                connect=args.connect,
+            )
+        elif args.command in {"vps-storage", "vps-usage", "vps-pm2", "vps-ls", "vps-services", "vps-logs", "vps-docker"}:
+            check_map = {
+                "vps-storage": ["storage"],
+                "vps-usage": ["summary", "usage", "network"],
+                "vps-pm2": ["pm2"],
+                "vps-ls": ["ls"],
+                "vps-services": ["services"],
+                "vps-logs": ["logs"],
+                "vps-docker": ["docker"],
+            }
+            results = vps_check(
+                host=args.host,
+                ssh_port=args.ssh_port,
+                identity=args.identity,
+                paths=args.path,
+                services=args.service,
+                include_pm2=args.command in {"vps-pm2", "vps-logs"},
+                include_logs=args.command == "vps-logs",
+                include_docker=args.command == "vps-docker",
+                timeout=args.timeout,
+                dry_run=args.dry_run,
+                check_types=check_map[args.command],
+            )
         elif args.command == "permission-guide":
             results = permission_guide(args.tool)
         elif args.command == "conn-watch":
@@ -4297,6 +5709,57 @@ def main(argv: list[str] | None = None) -> int:
                 use_searchsploit=not args.no_searchsploit,
                 use_nikto=args.nikto,
                 nikto_timeout=args.nikto_timeout,
+            )
+        elif args.command in {"content-discovery", "gobuster", "ffuf", "dirb"}:
+            selected_tool = args.tool or (args.command if args.command in {"gobuster", "ffuf", "dirb"} else "gobuster")
+            results = content_discovery(
+                args.url,
+                tool=selected_tool,
+                wordlist=args.wordlist,
+                wordlist_kind=args.wordlist_kind,
+                extensions=args.extensions,
+                status_codes=args.status_codes,
+                threads=args.threads,
+                rate=args.rate,
+                timeout=args.timeout,
+                output=args.output,
+                install_missing=args.install_missing,
+                package_manager=args.package_manager,
+                dry_run=args.dry_run,
+            )
+        elif args.command in {"fingerprint", "tls-audit", "dns-enum", "url-discovery"}:
+            results = external_web_wrapper(
+                args.command,
+                target=args.target,
+                tools_value=args.tools,
+                timeout=args.timeout,
+                rate=args.rate,
+                output=args.output,
+                install_missing=args.install_missing,
+                package_manager=args.package_manager,
+                dry_run=args.dry_run,
+            )
+        elif args.command == "web-scan":
+            results = external_web_wrapper(
+                "web-scan",
+                target=args.target,
+                tools_value=args.tool,
+                timeout=args.timeout,
+                rate=args.rate,
+                output=args.output,
+                install_missing=args.install_missing,
+                package_manager=args.package_manager,
+                dry_run=args.dry_run,
+            )
+        elif args.command == "js-audit":
+            results = js_audit(
+                args.url,
+                tools_value=args.tools,
+                output=args.output,
+                timeout=args.timeout,
+                install_missing=args.install_missing,
+                package_manager=args.package_manager,
+                dry_run=args.dry_run,
             )
         elif args.command == "shodan":
             results = shodan_lookup(
@@ -4380,14 +5843,34 @@ def main(argv: list[str] | None = None) -> int:
             "tools",
             "install-hints",
             "install-tool",
+            "install-tools",
             "sudo-su",
             "hatch",
+            "external-examples",
+            "seclists-find",
+            "lab-init",
+            "engagement-init",
+            "tryhackme",
+            "thm",
             "password-audit",
             "password-check",
             "password-generate",
             "admin-password",
             "awareness-plan",
             "local-posture",
+            "vps-check",
+            "vps",
+            "vps-health",
+            "vps-ui",
+            "vps-menu",
+            "vps-login",
+            "vps-storage",
+            "vps-usage",
+            "vps-pm2",
+            "vps-ls",
+            "vps-services",
+            "vps-logs",
+            "vps-docker",
             "permission-guide",
             "conn-watch",
             "log-watch",
