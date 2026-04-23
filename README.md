@@ -138,6 +138,8 @@ ktool web-workflow https://example.com --fingerprint --tls-audit --js-audit --ye
 ```bash
 ktool dns example.com --yes-i-am-authorized
 ktool whois example.com --yes-i-am-authorized
+ktool osint example.com
+ktool ip-intel 8.8.8.8
 ktool ports example.com --ports common --yes-i-am-authorized
 ktool subs example.com --yes-i-am-authorized
 ktool nmap example.com --top-ports 1000 --yes-i-am-authorized
@@ -161,6 +163,18 @@ ktool defang https://secure-login-account.top admin@example.com
 ktool threat-site-triage https://secure-login-account.top --fetch-body --output-markdown reports/threat-site.md --yes-i-am-authorized
 ktool vt 8.8.8.8
 ktool cve-lookup CVE-2024-3094
+```
+
+### Passive Intel
+
+Use these for low-risk enrichment of public infrastructure metadata:
+
+```bash
+ktool osint example.com --shodan --virustotal
+ktool osint https://portal.example.com --no-crtsh
+ktool ip-intel 1.1.1.1 --shodan
+ktool osint example.com --output-dir engagements/osint-example
+ktool ip-intel 8.8.8.8 --output-dir engagements/ip-intel-google
 ```
 
 ### Local / Network
@@ -235,6 +249,7 @@ Report behavior:
 - `target-brief`, `recon-workflow`, and `web-workflow` also write normalized findings under `findings/`
 - workflow runs also generate client-ready Markdown reports under `reports/`
 - `local-posture`, `vps-check`, `conn-watch`, `log-watch`, and `mobile-artifact-audit` now follow the same workspace/reporting pattern
+- `osint`, `ip-intel`, `content-discovery`, `threat-site-triage`, `js-audit`, and the wrapper commands can also save workspace artifacts with `--output-dir`
 
 Aggregate one workspace into a single rolled-up report:
 

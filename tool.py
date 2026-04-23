@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urljoin, urlparse
+from urllib.parse import quote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -428,6 +428,8 @@ def print_menu_panel() -> None:
                 ("4", "WHOIS Lookup"),
                 ("5", "TCP Port Check"),
                 ("6", "Subdomain Resolver"),
+                ("31", "Passive OSINT Lookup"),
+                ("46", "IP Intelligence"),
                 ("10", "nmap First Pass"),
                 ("22", "Vulnerability Lookup"),
                 ("35", "Shodan Host Intelligence"),
@@ -534,7 +536,7 @@ TOOL_CATEGORIES = {
         "title": "Exposure and Vulnerability Intelligence",
         "skills": ["Passive internet exposure review", "CVE research", "Service-to-risk mapping", "TLS review", "Mobile artifact triage"],
         "tools": ["searchsploit", "testssl.sh", "sslscan", "nuclei"],
-        "implemented": ["shodan", "cve-lookup", "virustotal", "vuln-lookup", "tls-audit", "mobile-artifact-audit"],
+        "implemented": ["osint", "ip-intel", "shodan", "cve-lookup", "virustotal", "vuln-lookup", "tls-audit", "mobile-artifact-audit"],
     },
     "passwords": {
         "title": "Password Security Testing",
@@ -772,6 +774,28 @@ WORKFLOW_REQUIREMENTS = {
         "recommended_data": [],
         "required_env": [],
         "recommended_env": [VIRUSTOTAL_API_KEY_ENV],
+        "required_python": [],
+        "recommended_python": [],
+    },
+    "osint": {
+        "title": "Passive OSINT Lookup",
+        "required_tools": [],
+        "recommended_tools": ["whois"],
+        "required_data": [],
+        "recommended_data": [],
+        "required_env": [],
+        "recommended_env": [SHODAN_API_KEY_ENV, VIRUSTOTAL_API_KEY_ENV],
+        "required_python": [],
+        "recommended_python": [],
+    },
+    "ip-intel": {
+        "title": "IP Intelligence",
+        "required_tools": [],
+        "recommended_tools": [],
+        "required_data": [],
+        "recommended_data": [],
+        "required_env": [],
+        "recommended_env": [SHODAN_API_KEY_ENV, VIRUSTOTAL_API_KEY_ENV],
         "required_python": [],
         "recommended_python": [],
     },
@@ -1270,11 +1294,11 @@ def api_key_value(provided: str | None, env_name: str, service_name: str) -> str
     return api_key
 
 
-def http_json_request(
+def http_json_value_request(
     url: str,
     timeout: float,
     headers: dict[str, str] | None = None,
-) -> dict[str, object]:
+) -> object:
     request_headers = {
         "User-Agent": USER_AGENT,
         "Accept": "application/json",
@@ -1309,6 +1333,17 @@ def http_json_request(
     raise ConnectionError(f"API request failed for {url}")
 
 
+def http_json_request(
+    url: str,
+    timeout: float,
+    headers: dict[str, str] | None = None,
+) -> dict[str, object]:
+    data = http_json_value_request(url, timeout=timeout, headers=headers)
+    if not isinstance(data, dict):
+        raise ConnectionError("API response was not a JSON object.")
+    return data
+
+
 def first_public_ip(target: str) -> tuple[str, str | None]:
     target = validate_host(target)
     try:
@@ -1325,6 +1360,327 @@ def first_public_ip(target: str) -> tuple[str, str | None]:
     if not addresses:
         raise ValueError(f"No addresses resolved for {target}.")
     return addresses[0], target
+
+
+def vt_lookup_optional(indicator: str, api_key: str | None, timeout: float, enabled: bool) -> dict[str, object]:
+    if not enabled:
+        return {"enabled": False}
+    key = (api_key or os.environ.get(VIRUSTOTAL_API_KEY_ENV) or "").strip()
+    if not key:
+        return {"enabled": False, "error": f"Missing {VIRUSTOTAL_API_KEY_ENV}."}
+    try:
+        return virustotal_lookup(indicator, api_key=key, timeout=timeout)
+    except (ConnectionError, ValueError, TimeoutError) as error:
+        return {"enabled": True, "error": str(error)}
+
+
+def shodan_lookup_optional(target: str, api_key: str | None, timeout: float, enabled: bool) -> dict[str, object]:
+    if not enabled:
+        return {"enabled": False}
+    key = (api_key or os.environ.get(SHODAN_API_KEY_ENV) or "").strip()
+    if not key:
+        return {"enabled": False, "error": f"Missing {SHODAN_API_KEY_ENV}."}
+    try:
+        return shodan_lookup(target, api_key=key, timeout=timeout, history=False, minify=False)
+    except (ConnectionError, ValueError, TimeoutError) as error:
+        return {"enabled": True, "error": str(error)}
+
+
+def reverse_dns_lookup(ip: str) -> dict[str, object]:
+    try:
+        host, aliases, addresses = socket.gethostbyaddr(ip)
+        return {
+            "host": host,
+            "aliases": sorted(set(aliases)),
+            "addresses": sorted(set(addresses)),
+        }
+    except (socket.herror, socket.gaierror, OSError) as error:
+        return {"error": str(error)}
+
+
+def rdap_entity_name(entity: dict[str, object]) -> str | None:
+    vcard = entity.get("vcardArray")
+    if not isinstance(vcard, list) or len(vcard) < 2 or not isinstance(vcard[1], list):
+        return None
+    for item in vcard[1]:
+        if (
+            isinstance(item, list)
+            and len(item) >= 4
+            and str(item[0]).lower() == "fn"
+            and item[3]
+        ):
+            return str(item[3])
+    return None
+
+
+def rdap_lookup(target: str, kind: str, timeout: float) -> dict[str, object]:
+    if kind not in {"ip", "domain"}:
+        raise ValueError("RDAP kind must be ip or domain.")
+    url = f"https://rdap.org/{kind}/{quote(target)}"
+    data = http_json_request(url, timeout=timeout)
+    entities = data.get("entities") if isinstance(data.get("entities"), list) else []
+    contacts = []
+    for entity in entities[:15]:
+        if not isinstance(entity, dict):
+            continue
+        contacts.append(
+            {
+                "handle": entity.get("handle"),
+                "roles": entity.get("roles", []),
+                "name": rdap_entity_name(entity),
+            }
+        )
+    notices = []
+    for notice in data.get("notices", []) if isinstance(data.get("notices"), list) else []:
+        if isinstance(notice, dict) and notice.get("title"):
+            notices.append(str(notice["title"]))
+    summary = {
+        "handle": data.get("handle"),
+        "name": data.get("name"),
+        "country": data.get("country"),
+        "start_address": data.get("startAddress"),
+        "end_address": data.get("endAddress"),
+        "status": data.get("status", []),
+        "links": [item.get("href") for item in data.get("links", []) if isinstance(item, dict) and item.get("href")][:10],
+        "contacts": contacts,
+        "notices": notices[:10],
+        "source": url,
+    }
+    return summary
+
+
+def ip_geolocation_lookup(ip: str, timeout: float) -> dict[str, object]:
+    url = f"https://ipapi.co/{quote(ip)}/json/"
+    data = http_json_request(url, timeout=timeout)
+    return {
+        "ip": data.get("ip", ip),
+        "city": data.get("city"),
+        "region": data.get("region"),
+        "country": data.get("country_name") or data.get("country"),
+        "country_code": data.get("country_code"),
+        "latitude": data.get("latitude"),
+        "longitude": data.get("longitude"),
+        "org": data.get("org"),
+        "asn": data.get("asn"),
+        "postal": data.get("postal"),
+        "timezone": data.get("timezone"),
+        "source": url,
+    }
+
+
+def crtsh_subdomains(domain: str, timeout: float) -> dict[str, object]:
+    url = f"https://crt.sh/?q=%25.{quote(domain)}&output=json"
+    data = http_json_value_request(url, timeout=timeout, headers={"Accept": "application/json"})
+    if not isinstance(data, list):
+        raise ConnectionError("crt.sh response was not a JSON array.")
+    discovered: set[str] = set()
+    issuers: set[str] = set()
+    for row in data[:1000]:
+        if not isinstance(row, dict):
+            continue
+        issuer = row.get("issuer_name")
+        if issuer:
+            issuers.add(str(issuer))
+        names = str(row.get("name_value") or "").splitlines()
+        for name in names:
+            clean = name.strip().lower().lstrip("*.").rstrip(".")
+            if clean and (clean == domain or clean.endswith("." + domain)):
+                discovered.add(clean)
+    subdomains = sorted(discovered)
+    return {
+        "count": len(subdomains),
+        "subdomains": subdomains[:250],
+        "issuers": sorted(issuers)[:25],
+        "source": url,
+    }
+
+
+def collect_ip_intel(
+    target: str,
+    timeout: float,
+    shodan_api_key: str | None,
+    vt_api_key: str | None,
+    use_shodan: bool,
+    use_virustotal: bool,
+) -> dict[str, object]:
+    ip, resolved_from = first_public_ip(target)
+    result: dict[str, object] = {
+        "target": target,
+        "ip": ip,
+        "resolved_from": resolved_from,
+        "reverse_dns": reverse_dns_lookup(ip),
+    }
+    try:
+        result["rdap"] = rdap_lookup(ip, kind="ip", timeout=timeout)
+    except (ConnectionError, ValueError) as error:
+        result["rdap"] = {"error": str(error)}
+    try:
+        result["geolocation"] = ip_geolocation_lookup(ip, timeout=timeout)
+    except (ConnectionError, ValueError) as error:
+        result["geolocation"] = {"error": str(error)}
+    result["shodan"] = shodan_lookup_optional(ip, api_key=shodan_api_key, timeout=timeout, enabled=use_shodan)
+    result["virustotal"] = vt_lookup_optional(ip, api_key=vt_api_key, timeout=timeout, enabled=use_virustotal)
+    return result
+
+
+def ip_intel(
+    target: str,
+    timeout: float,
+    shodan_api_key: str | None,
+    vt_api_key: str | None,
+    use_shodan: bool,
+    use_virustotal: bool,
+    output_dir: str | None = None,
+) -> dict[str, object]:
+    result = collect_ip_intel(
+        target=target,
+        timeout=timeout,
+        shodan_api_key=shodan_api_key,
+        vt_api_key=vt_api_key,
+        use_shodan=use_shodan,
+        use_virustotal=use_virustotal,
+    )
+    print_section("IP Intelligence")
+    cyber_line("target", target)
+    cyber_line("ip", str(result["ip"]))
+    if result.get("resolved_from"):
+        cyber_line("resolved from", str(result["resolved_from"]))
+
+    reverse_dns = result.get("reverse_dns", {})
+    if isinstance(reverse_dns, dict) and reverse_dns.get("host"):
+        cyber_line("reverse dns", str(reverse_dns["host"]))
+    geolocation = result.get("geolocation", {})
+    if isinstance(geolocation, dict):
+        city = str(geolocation.get("city") or "")
+        region = str(geolocation.get("region") or "")
+        country = str(geolocation.get("country") or geolocation.get("country_code") or "")
+        geo_label = ", ".join(part for part in (city, region, country) if part)
+        if geo_label:
+            cyber_line("geolocation", geo_label)
+        if geolocation.get("org"):
+            cyber_line("network owner", str(geolocation["org"]))
+        if geolocation.get("asn"):
+            cyber_line("asn", str(geolocation["asn"]))
+    rdap = result.get("rdap", {})
+    if isinstance(rdap, dict) and rdap.get("handle"):
+        cyber_line("rdap handle", str(rdap["handle"]))
+    if output_dir:
+        paths = build_workflow_paths(
+            name=f"ip-intel-{result['ip']}",
+            client="Passive IP Intelligence",
+            target=str(result["ip"]),
+            output_dir=output_dir,
+        )
+        normalized_findings = normalize_intel_findings(asset=str(result["ip"]), result=result, source="ip-intel")
+        result["workspace"] = str(paths["base"])
+        result["findings"] = [asdict(item) for item in normalized_findings]
+        result["report_artifacts"] = write_client_report_artifacts(
+            paths,
+            report_slug="ip-intel-report",
+            title="IP Intelligence Client Report",
+            asset=str(result["ip"]),
+            findings=normalized_findings,
+        )
+        write_json_output(paths["scans"] / "ip-intel.json", result)
+    return result
+
+
+def osint_lookup(
+    target: str,
+    timeout: float,
+    include_crtsh: bool,
+    shodan_api_key: str | None,
+    vt_api_key: str | None,
+    use_shodan: bool,
+    use_virustotal: bool,
+    output_dir: str | None = None,
+) -> dict[str, object]:
+    raw_target = refang_value(target.strip())
+    if not raw_target:
+        raise ValueError("OSINT target cannot be empty.")
+
+    parsed = urlparse(raw_target if "://" in raw_target else f"//{raw_target}")
+    host_candidate = parsed.hostname or raw_target
+    try:
+        ipaddress.ip_address(host_candidate)
+        kind = "ip"
+    except ValueError:
+        kind = "url" if parsed.scheme else "domain"
+
+    if kind == "ip":
+        result = ip_intel(
+            host_candidate,
+            timeout=timeout,
+            shodan_api_key=shodan_api_key,
+            vt_api_key=vt_api_key,
+            use_shodan=use_shodan,
+            use_virustotal=use_virustotal,
+            output_dir=output_dir,
+        )
+        result["kind"] = "ip"
+        return result
+
+    host = target_domain(raw_target)
+    print_section("Passive OSINT")
+    cyber_line("target", raw_target)
+    cyber_line("host", host)
+    cyber_line("kind", kind)
+    print("[i] Passive enrichment only. This collects public metadata and local resolution results.")
+
+    result: dict[str, object] = {
+        "target": raw_target,
+        "host": host,
+        "kind": kind,
+    }
+    try:
+        result["dns"] = resolve_dns(host)
+    except ValueError as error:
+        result["dns"] = {"error": str(error)}
+    try:
+        result["whois"] = whois_lookup(host, timeout=timeout, install_missing=False)
+    except (ValueError, TimeoutError) as error:
+        result["whois"] = {"error": str(error)}
+    try:
+        result["rdap"] = rdap_lookup(host, kind="domain", timeout=timeout)
+    except (ConnectionError, ValueError) as error:
+        result["rdap"] = {"error": str(error)}
+    if include_crtsh:
+        try:
+            result["crtsh"] = crtsh_subdomains(host, timeout=timeout)
+            crt_data = result["crtsh"]
+            if isinstance(crt_data, dict):
+                cyber_line("crt.sh names", str(crt_data.get("count", 0)))
+        except ConnectionError as error:
+            result["crtsh"] = {"error": str(error)}
+
+    result["ip_intel"] = collect_ip_intel(
+        host,
+        timeout=timeout,
+        shodan_api_key=shodan_api_key,
+        vt_api_key=vt_api_key,
+        use_shodan=use_shodan,
+        use_virustotal=False,
+    )
+    result["virustotal"] = vt_lookup_optional(host, api_key=vt_api_key, timeout=timeout, enabled=use_virustotal)
+    if output_dir:
+        paths = build_workflow_paths(
+            name=f"osint-{host}",
+            client="Passive OSINT Lookup",
+            target=host,
+            output_dir=output_dir,
+        )
+        normalized_findings = normalize_intel_findings(asset=host, result=result, source="osint")
+        result["workspace"] = str(paths["base"])
+        result["findings"] = [asdict(item) for item in normalized_findings]
+        result["report_artifacts"] = write_client_report_artifacts(
+            paths,
+            report_slug="osint-report",
+            title="Passive OSINT Client Report",
+            asset=host,
+            findings=normalized_findings,
+        )
+        write_json_output(paths["scans"] / "osint.json", result)
+    return result
 
 
 def header_analyzer(url: str, timeout: float) -> HeaderResult:
@@ -2245,7 +2601,7 @@ def phishing_indicators(url: str, headers: dict[str, str], body: bytes) -> list[
     return unique
 
 
-def threat_site_triage(url: str, timeout: float, fetch_body: bool, output_markdown: str | None) -> dict[str, object]:
+def threat_site_triage(url: str, timeout: float, fetch_body: bool, output_markdown: str | None, output_dir: str | None = None) -> dict[str, object]:
     normalized = normalize_url(refang_value(url))
     parsed = urlparse(normalized)
     host = parsed.hostname
@@ -2310,6 +2666,27 @@ def threat_site_triage(url: str, timeout: float, fetch_body: bool, output_markdo
     if output_markdown:
         Path(output_markdown).write_text(report_text, encoding="utf-8")
         print(f"\n[+] Takedown evidence report saved to {output_markdown}")
+    if output_dir:
+        paths = build_workflow_paths(
+            name=f"threat-site-{host}",
+            client="Threat Site Triage",
+            target=normalized,
+            output_dir=output_dir,
+        )
+        normalized_findings = normalize_threat_site_findings(asset=normalized, result=result, source="threat-site-triage")
+        result["workspace"] = str(paths["base"])
+        result["report_artifacts"] = write_client_report_artifacts(
+            paths,
+            report_slug="threat-site-report",
+            title="Threat Site Triage Client Report",
+            asset=normalized,
+            findings=normalized_findings,
+        )
+        write_json_output(paths["scans"] / "threat-site-triage.json", result)
+        if not output_markdown:
+            markdown_path = paths["reports"] / "threat-site-evidence.md"
+            markdown_path.write_text(report_text, encoding="utf-8")
+            result["evidence_report"] = str(markdown_path)
     return result
 
 
@@ -2686,6 +3063,7 @@ def content_discovery(
     install_missing: bool,
     package_manager: str | None,
     dry_run: bool,
+    output_dir: str | None = None,
 ) -> dict[str, object]:
     normalized = normalize_url(url)
     if tool not in {"gobuster", "ffuf", "dirb"}:
@@ -2732,11 +3110,29 @@ def content_discovery(
         if status_codes:
             print("[i] Dirb does not support the same status-code filter as Gobuster/FFUF; status filter ignored.")
 
-    return {
+    result = {
         "url": normalized,
         "wordlist": str(selected_wordlist),
         "result": run_external_checked(tool, args, timeout=timeout + 30, install_missing=install_missing, package_manager=package_manager, dry_run=dry_run),
     }
+    if output_dir:
+        paths = build_workflow_paths(
+            name=f"content-discovery-{target_domain(normalized)}",
+            client="Content Discovery",
+            target=normalized,
+            output_dir=output_dir,
+        )
+        normalized_findings = normalize_content_discovery_findings(asset=normalized, result=result, source="content-discovery")
+        result["workspace"] = str(paths["base"])
+        result["report_artifacts"] = write_client_report_artifacts(
+            paths,
+            report_slug="content-discovery-report",
+            title="Content Discovery Client Report",
+            asset=normalized,
+            findings=normalized_findings,
+        )
+        write_json_output(paths["scans"] / "content-discovery.json", result)
+    return result
 
 
 def external_web_wrapper(
@@ -2749,6 +3145,7 @@ def external_web_wrapper(
     install_missing: bool,
     package_manager: str | None,
     dry_run: bool,
+    output_dir: str | None = None,
 ) -> dict[str, object]:
     allowed = EXTERNAL_WRAPPER_TOOLS[wrapper]
     selected_tools = split_tool_names(tools_value, allowed)
@@ -2798,7 +3195,25 @@ def external_web_wrapper(
             args.extend(["-o", output])
         results.append(run_external_checked(tool, args, timeout, install_missing, package_manager, dry_run))
 
-    return {"wrapper": wrapper, "target": normalized_url, "tools": selected_tools, "results": results}
+    result = {"wrapper": wrapper, "target": normalized_url, "tools": selected_tools, "results": results}
+    if output_dir:
+        paths = build_workflow_paths(
+            name=f"{wrapper}-{target_domain(normalized_url)}",
+            client=f"{wrapper} wrapper",
+            target=normalized_url,
+            output_dir=output_dir,
+        )
+        normalized_findings = normalize_external_wrapper_findings(asset=normalized_url, wrapper=wrapper, result=result, source=wrapper)
+        result["workspace"] = str(paths["base"])
+        result["report_artifacts"] = write_client_report_artifacts(
+            paths,
+            report_slug=f"{wrapper}-report",
+            title=f"{wrapper.replace('-', ' ').title()} Client Report",
+            asset=normalized_url,
+            findings=normalized_findings,
+        )
+        write_json_output(paths["scans"] / f"{wrapper}.json", result)
+    return result
 
 
 def extract_javascript_urls(url: str, timeout: float) -> list[str]:
@@ -2819,15 +3234,16 @@ def js_audit(
     install_missing: bool,
     package_manager: str | None,
     dry_run: bool,
+    output_dir: str | None = None,
 ) -> dict[str, object]:
     normalized = normalize_url(url)
     selected_tools = split_tool_names(tools_value, EXTERNAL_WRAPPER_TOOLS["js-audit"])
-    output_dir = Path(output).expanduser()
-    output_dir.mkdir(parents=True, exist_ok=True)
+    download_dir = Path(output).expanduser()
+    download_dir.mkdir(parents=True, exist_ok=True)
 
     print_section("JavaScript Audit")
     cyber_line("url", normalized)
-    cyber_line("output", str(output_dir))
+    cyber_line("output", str(download_dir))
     print("[i] Downloads same-page JavaScript assets for local dependency/secret-pattern review.")
 
     script_urls = extract_javascript_urls(normalized, timeout=timeout)
@@ -2838,7 +3254,7 @@ def js_audit(
         except ConnectionError as error:
             print(f"[skip] {script_url}: {error}")
             continue
-        filename = output_dir / f"script-{index:03d}.js"
+        filename = download_dir / f"script-{index:03d}.js"
         filename.write_bytes(body)
         downloaded.append(str(filename))
         print(f"[js] {script_url} -> {filename}")
@@ -2846,13 +3262,31 @@ def js_audit(
     tool_results = []
     for tool in selected_tools:
         args = {
-            "retire": ["--path", str(output_dir)],
-            "semgrep": ["--config", "auto", str(output_dir)],
-            "trufflehog": ["filesystem", str(output_dir), "--no-update"],
+            "retire": ["--path", str(download_dir)],
+            "semgrep": ["--config", "auto", str(download_dir)],
+            "trufflehog": ["filesystem", str(download_dir), "--no-update"],
         }[tool]
         tool_results.append(run_external_checked(tool, args, timeout, install_missing, package_manager, dry_run))
 
-    return {"url": normalized, "scripts": script_urls, "downloaded": downloaded, "tools": selected_tools, "results": tool_results}
+    result = {"url": normalized, "scripts": script_urls, "downloaded": downloaded, "tools": selected_tools, "results": tool_results}
+    if output_dir:
+        paths = build_workflow_paths(
+            name=f"js-audit-{target_domain(normalized)}",
+            client="JavaScript Audit",
+            target=normalized,
+            output_dir=output_dir,
+        )
+        normalized_findings = normalize_js_audit_findings(asset=normalized, result=result, source="js-audit")
+        result["workspace"] = str(paths["base"])
+        result["report_artifacts"] = write_client_report_artifacts(
+            paths,
+            report_slug="js-audit-report",
+            title="JavaScript Audit Client Report",
+            asset=normalized,
+            findings=normalized_findings,
+        )
+        write_json_output(paths["scans"] / "js-audit.json", result)
+    return result
 
 
 def slugify_name(value: str) -> str:
@@ -3786,6 +4220,306 @@ def normalize_mobile_findings(asset: str, result: dict[str, object], source: str
                     remediation="Confirm endpoint ownership, transport security, and whether each embedded service is required for the shipped mobile build.",
                 )
             )
+    return dedupe_normalized_findings(findings)
+
+
+def normalize_intel_findings(asset: str, result: dict[str, object], source: str) -> list[NormalizedFinding]:
+    findings: list[NormalizedFinding] = []
+
+    def add_finding(
+        title: str,
+        severity: str,
+        category: str,
+        evidence: str,
+        impact: str,
+        remediation: str,
+    ) -> None:
+        findings.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, title + evidence[:48]),
+                title=title,
+                severity=severity,
+                category=category,
+                asset=asset,
+                source=source,
+                evidence=evidence,
+                impact=impact,
+                remediation=remediation,
+            )
+        )
+
+    ip_intel_data = result.get("ip_intel") if isinstance(result.get("ip_intel"), dict) else result
+    if isinstance(ip_intel_data, dict):
+        shodan = ip_intel_data.get("shodan", {})
+        if isinstance(shodan, dict):
+            summary = shodan.get("summary", {}) if isinstance(shodan.get("summary"), dict) else {}
+            ports = summary.get("ports", []) if isinstance(summary.get("ports"), list) else []
+            risky_ports = sorted(port for port in ports if port in HIGH_RISK_LISTEN_PORTS or port in SUSPICIOUS_PORTS)
+            if risky_ports:
+                max_port = risky_ports[0] if risky_ports else None
+                severity = "critical" if any(port in {23, 2323, 2375} for port in risky_ports) else "high"
+                add_finding(
+                    title="Risky Internet-Exposed Services Indexed",
+                    severity=severity,
+                    category="exposure",
+                    evidence=", ".join(f"{port}/tcp" for port in risky_ports[:12]),
+                    impact="Publicly indexed high-value or weakly managed services materially expand external attack surface.",
+                    remediation="Verify each exposed service is intended, patch and harden it, and restrict exposure with firewalling or VPN where possible.",
+                )
+            services = shodan.get("services", []) if isinstance(shodan.get("services"), list) else []
+            cve_hits: set[str] = set()
+            for service in services:
+                if not isinstance(service, dict):
+                    continue
+                cves = service.get("cves", [])
+                if isinstance(cves, list):
+                    cve_hits.update(str(item) for item in cves[:10])
+            if cve_hits:
+                severity = "critical" if len(cve_hits) >= 3 else "high"
+                add_finding(
+                    title="Public Vulnerability References Found for Exposed Services",
+                    severity=severity,
+                    category="vulnerability",
+                    evidence=", ".join(sorted(cve_hits)[:10]),
+                    impact="Exposed services already associated with CVEs deserve prioritized validation, patching, and exposure reduction.",
+                    remediation="Validate affected products and versions, patch confirmed exposures, and reduce direct internet reachability until remediation is complete.",
+                )
+
+        vt = ip_intel_data.get("virustotal", {})
+        if isinstance(vt, dict) and vt.get("matched"):
+            summary = vt.get("summary", {}) if isinstance(vt.get("summary"), dict) else {}
+            stats = summary.get("last_analysis_stats", {}) if isinstance(summary.get("last_analysis_stats"), dict) else {}
+            malicious = int(stats.get("malicious", 0) or 0)
+            suspicious = int(stats.get("suspicious", 0) or 0)
+            if malicious > 0 or suspicious > 0:
+                severity = "high" if malicious > 0 else "medium"
+                add_finding(
+                    title="Threat Intelligence Reputation Flags Present",
+                    severity=severity,
+                    category="intel",
+                    evidence=f"malicious={malicious}, suspicious={suspicious}, id={summary.get('id')}",
+                    impact="Third-party reputation flags can indicate scanning, abuse history, malware distribution, or previously observed malicious use.",
+                    remediation="Correlate the indicator with internal logs and exposure context before deciding on blocking, containment, or escalation.",
+                )
+
+    crt_data = result.get("crtsh", {})
+    if isinstance(crt_data, dict) and isinstance(crt_data.get("count"), int) and crt_data["count"] > 0:
+        severity = "info" if crt_data["count"] < 25 else "low"
+        preview = crt_data.get("subdomains", []) if isinstance(crt_data.get("subdomains"), list) else []
+        add_finding(
+            title="Certificate Transparency Names Discovered",
+            severity=severity,
+            category="recon",
+            evidence=f"{crt_data['count']} names visible in crt.sh; sample: {', '.join(str(item) for item in preview[:8])}",
+            impact="Certificate transparency data expands the observable external namespace and can reveal staging, API, or forgotten hosts.",
+            remediation="Review certificate issuance scope and confirm all externally visible names are intended, maintained, and covered by monitoring.",
+        )
+
+    dns_data = result.get("dns", {})
+    if isinstance(dns_data, dict):
+        addresses = dns_data.get("addresses", []) if isinstance(dns_data.get("addresses"), list) else []
+        if len(addresses) > 3:
+            add_finding(
+                title="Multiple Public Addresses Resolved for Target",
+                severity="info",
+                category="network",
+                evidence=", ".join(str(item) for item in addresses[:10]),
+                impact="Multiple addresses may indicate CDN usage, load balancing, or a broader externally reachable footprint than expected.",
+                remediation="Confirm address ownership and whether each resolved edge or origin should remain externally reachable.",
+            )
+
+    return dedupe_normalized_findings(findings)
+
+
+def normalize_threat_site_findings(asset: str, result: dict[str, object], source: str) -> list[NormalizedFinding]:
+    findings: list[NormalizedFinding] = []
+    indicators = result.get("indicators", [])
+    if isinstance(indicators, list):
+        for indicator in indicators:
+            if not isinstance(indicator, dict):
+                continue
+            severity = str(indicator.get("severity") or "medium").lower()
+            detail = str(indicator.get("indicator") or "")
+            findings.append(
+                NormalizedFinding(
+                    finding_id=finding_identifier(source, asset, detail),
+                    title=f"Threat Site Indicator: {detail}",
+                    severity=severity,
+                    category="threat-site",
+                    asset=asset,
+                    source=source,
+                    evidence=detail,
+                    impact="Content or metadata indicators suggest phishing behavior, suspicious transport patterns, or unsafe submission flows.",
+                    remediation="Preserve evidence, submit abuse reports to the relevant providers, and block the indicator in approved controls if policy allows.",
+                )
+            )
+    tls_data = result.get("tls", {})
+    if isinstance(tls_data, dict) and tls_data.get("error"):
+        findings.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, "tls-collection-error"),
+                title="TLS Certificate Collection Failed",
+                severity="low",
+                category="tls",
+                asset=asset,
+                source=source,
+                evidence=str(tls_data.get("error")),
+                impact="TLS failures can indicate expired, misconfigured, or intentionally degraded transport on the target site.",
+                remediation="Capture the certificate error in evidence and correlate it with browser behavior and hosting setup.",
+            )
+        )
+    return dedupe_normalized_findings(findings)
+
+
+def normalize_content_discovery_findings(asset: str, result: dict[str, object], source: str) -> list[NormalizedFinding]:
+    findings: list[NormalizedFinding] = []
+    tool_result = result.get("result", {})
+    if not isinstance(tool_result, dict) or not tool_result.get("executed"):
+        return findings
+    stdout = str(tool_result.get("stdout") or "")
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    matches = []
+    for line in lines[:400]:
+        if re.search(r"\b(200|204|301|302|307|401|403)\b", line):
+            matches.append(line[:220])
+    if matches:
+        findings.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, "content-discovery-surface"),
+                title="Interesting Web Content Paths Identified",
+                severity="info",
+                category="content",
+                asset=asset,
+                source=source,
+                evidence=f"{len(matches)} matching discovery results. Sample: " + " | ".join(matches[:5]),
+                impact="Discovered paths can expose administrative, legacy, or undocumented application surface that deserves review.",
+                remediation="Validate discovered paths against intended exposure and remove or protect anything that should not be publicly reachable.",
+            )
+        )
+    return dedupe_normalized_findings(findings)
+
+
+def normalize_external_wrapper_findings(asset: str, wrapper: str, result: dict[str, object], source: str) -> list[NormalizedFinding]:
+    findings: list[NormalizedFinding] = []
+    tool_results = result.get("results", [])
+    if not isinstance(tool_results, list):
+        return findings
+
+    if wrapper == "tls-audit":
+        combined = "\n".join(
+            str(item.get("stdout") or "") + "\n" + str(item.get("stderr") or "")
+            for item in tool_results
+            if isinstance(item, dict) and item.get("executed")
+        ).lower()
+        indicators = [
+            ("obsolete tls protocol support", "high", r"\b(sslv2|sslv3|tlsv1\.0|tlsv1\.1)\b"),
+            ("weak cipher support", "medium", r"\b(rc4|3des|des-cbc3|cbc)\b"),
+            ("certificate trust or expiry issue", "medium", r"\b(expired|self-signed|hostname mismatch|not trusted)\b"),
+        ]
+        for title, severity, pattern in indicators:
+            if re.search(pattern, combined):
+                findings.append(
+                    NormalizedFinding(
+                        finding_id=finding_identifier(source, asset, title),
+                        title=title.title(),
+                        severity=severity,
+                        category="tls",
+                        asset=asset,
+                        source=source,
+                        evidence=title,
+                        impact="TLS weaknesses can enable downgrade risk, trust failures, or weaker transport protection than expected.",
+                        remediation="Disable obsolete protocols and weak ciphers, renew certificates as needed, and align TLS config with current hardening standards.",
+                    )
+                )
+    elif wrapper == "web-scan":
+        severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+        for item in tool_results:
+            if not isinstance(item, dict) or not item.get("executed"):
+                continue
+            output = str(item.get("stdout") or "")
+            for severity in severity_counts:
+                severity_counts[severity] += len(re.findall(rf"\[{severity}\]", output, flags=re.I))
+        for severity, count in severity_counts.items():
+            if count <= 0:
+                continue
+            findings.append(
+                NormalizedFinding(
+                    finding_id=finding_identifier(source, asset, f"web-scan-{severity}-{count}"),
+                    title=f"Web Scanner Reported {severity.title()} Signals",
+                    severity=severity,
+                    category="web-scan",
+                    asset=asset,
+                    source=source,
+                    evidence=f"{count} {severity} findings reported by local scan tooling",
+                    impact="Local web scan tooling identified signals that warrant manual validation and remediation prioritization.",
+                    remediation="Review the saved scan output, validate each reported issue, and remediate confirmed weaknesses.",
+                )
+            )
+    elif wrapper in {"dns-enum", "url-discovery"}:
+        total_lines = 0
+        for item in tool_results:
+            if not isinstance(item, dict) or not item.get("executed"):
+                continue
+            output = str(item.get("stdout") or "")
+            total_lines += len([line for line in output.splitlines() if line.strip()])
+        if total_lines > 0:
+            title = "External Names Discovered" if wrapper == "dns-enum" else "Historical or Crawled URLs Discovered"
+            category = "dns" if wrapper == "dns-enum" else "urls"
+            findings.append(
+                NormalizedFinding(
+                    finding_id=finding_identifier(source, asset, f"{wrapper}-{total_lines}"),
+                    title=title,
+                    severity="info",
+                    category=category,
+                    asset=asset,
+                    source=source,
+                    evidence=f"{total_lines} lines of discovery output collected",
+                    impact="Discovery output expands the target surface available for review and can reveal overlooked assets or routes.",
+                    remediation="Review discovered names or URLs against inventory and remove or protect anything that is unintended or stale.",
+                )
+            )
+    return dedupe_normalized_findings(findings)
+
+
+def normalize_js_audit_findings(asset: str, result: dict[str, object], source: str) -> list[NormalizedFinding]:
+    findings: list[NormalizedFinding] = []
+    scripts = result.get("scripts", [])
+    if isinstance(scripts, list) and len(scripts) > 20:
+        findings.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, "large-js-surface"),
+                title="Large JavaScript Attack Surface Downloaded",
+                severity="info",
+                category="javascript",
+                asset=asset,
+                source=source,
+                evidence=f"{len(scripts)} JavaScript URLs referenced by the target page",
+                impact="A larger client-side code surface increases dependency, secret-leakage, and exposed-function review requirements.",
+                remediation="Review downloaded scripts, third-party dependencies, and unnecessary client-side bundles for reduction opportunities.",
+            )
+        )
+    for item in result.get("results", []) if isinstance(result.get("results"), list) else []:
+        if not isinstance(item, dict) or not item.get("executed"):
+            continue
+        tool_name = str(item.get("tool") or "tool")
+        returncode = int(item.get("returncode", 0) or 0)
+        if returncode == 0:
+            continue
+        stdout = str(item.get("stdout") or "")
+        evidence = stdout.splitlines()[0][:220] if stdout.strip() else f"{tool_name} returned code {returncode}"
+        findings.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, f"{tool_name}-nonzero"),
+                title=f"{tool_name.title()} Reported JavaScript Review Signals",
+                severity="medium",
+                category="javascript",
+                asset=asset,
+                source=source,
+                evidence=evidence,
+                impact="Local JavaScript review tooling reported issues or matches that should be validated in the downloaded client code.",
+                remediation="Inspect the saved tool output and downloaded scripts, then remediate confirmed secret leakage, outdated libraries, or risky patterns.",
+            )
+        )
     return dedupe_normalized_findings(findings)
 
 
@@ -7000,6 +7734,7 @@ def build_parser() -> argparse.ArgumentParser:
     content_parser.add_argument("--rate", type=int, default=50, help="FFUF request rate limit.")
     content_parser.add_argument("--timeout", type=float, default=120.0, help="Command timeout in seconds.")
     content_parser.add_argument("--output", help="Optional external-tool output file.")
+    content_parser.add_argument("--output-dir", help="Workspace directory for saved scan output and report artifacts.")
     content_parser.add_argument("--dry-run", action="store_true", help="Print the command without running it.")
 
     fingerprint_parser = subparsers.add_parser("fingerprint", help="Run installed web fingerprinting tools.")
@@ -7010,6 +7745,7 @@ def build_parser() -> argparse.ArgumentParser:
     fingerprint_parser.add_argument("--timeout", type=float, default=120.0, help="Per-tool timeout in seconds.")
     fingerprint_parser.add_argument("--rate", type=int, default=20, help="Reserved for compatible tools.")
     fingerprint_parser.add_argument("--output", help="Optional output path for tools that support -o.")
+    fingerprint_parser.add_argument("--output-dir", help="Workspace directory for saved scan output and report artifacts.")
     fingerprint_parser.add_argument("--dry-run", action="store_true", help="Print commands without running them.")
 
     tls_audit_parser = subparsers.add_parser("tls-audit", help="Run installed TLS review tools.")
@@ -7020,6 +7756,7 @@ def build_parser() -> argparse.ArgumentParser:
     tls_audit_parser.add_argument("--timeout", type=float, default=300.0, help="Per-tool timeout in seconds.")
     tls_audit_parser.add_argument("--rate", type=int, default=20, help="Reserved for compatible tools.")
     tls_audit_parser.add_argument("--output", help="Optional output path for tools that support -o.")
+    tls_audit_parser.add_argument("--output-dir", help="Workspace directory for saved scan output and report artifacts.")
     tls_audit_parser.add_argument("--dry-run", action="store_true", help="Print commands without running them.")
 
     dns_enum_parser = subparsers.add_parser("dns-enum", help="Run passive/low-noise DNS enumeration tools.")
@@ -7030,6 +7767,7 @@ def build_parser() -> argparse.ArgumentParser:
     dns_enum_parser.add_argument("--timeout", type=float, default=300.0, help="Per-tool timeout in seconds.")
     dns_enum_parser.add_argument("--rate", type=int, default=20, help="Reserved for compatible tools.")
     dns_enum_parser.add_argument("--output", help="Optional output path for tools that support -o.")
+    dns_enum_parser.add_argument("--output-dir", help="Workspace directory for saved scan output and report artifacts.")
     dns_enum_parser.add_argument("--dry-run", action="store_true", help="Print commands without running them.")
 
     url_discovery_parser = subparsers.add_parser("url-discovery", help="Run URL discovery/crawling tools.")
@@ -7040,6 +7778,7 @@ def build_parser() -> argparse.ArgumentParser:
     url_discovery_parser.add_argument("--timeout", type=float, default=300.0, help="Per-tool timeout in seconds.")
     url_discovery_parser.add_argument("--rate", type=int, default=20, help="Rate limit for compatible tools.")
     url_discovery_parser.add_argument("--output", help="Optional output path for tools that support -o.")
+    url_discovery_parser.add_argument("--output-dir", help="Workspace directory for saved scan output and report artifacts.")
     url_discovery_parser.add_argument("--dry-run", action="store_true", help="Print commands without running them.")
 
     web_scan_parser = subparsers.add_parser("web-scan", help="Run installed safe web scan tools such as nuclei or nikto.")
@@ -7050,6 +7789,7 @@ def build_parser() -> argparse.ArgumentParser:
     web_scan_parser.add_argument("--rate", type=int, default=20, help="Rate limit for compatible tools.")
     web_scan_parser.add_argument("--timeout", type=float, default=300.0, help="Command timeout in seconds.")
     web_scan_parser.add_argument("--output", help="Optional output path for tools that support -o.")
+    web_scan_parser.add_argument("--output-dir", help="Workspace directory for saved scan output and report artifacts.")
     web_scan_parser.add_argument("--dry-run", action="store_true", help="Print command without running it.")
 
     js_audit_parser = subparsers.add_parser("js-audit", help="Download page JavaScript and run local audit tools.")
@@ -7060,6 +7800,7 @@ def build_parser() -> argparse.ArgumentParser:
     js_audit_parser.add_argument("--output", default="js-downloads", help="Directory for downloaded JavaScript files.")
     js_audit_parser.add_argument("--browser", action="store_true", help=f"Accepted for workflow compatibility; {TOOL_NAME} uses static HTML extraction.")
     js_audit_parser.add_argument("--timeout", type=float, default=120.0, help="Network and per-tool timeout in seconds.")
+    js_audit_parser.add_argument("--output-dir", help="Workspace directory for saved scan output and report artifacts.")
     js_audit_parser.add_argument("--dry-run", action="store_true", help="Print audit commands after downloading scripts.")
 
     lab_parser = subparsers.add_parser(
@@ -7150,6 +7891,27 @@ def build_parser() -> argparse.ArgumentParser:
     shodan_parser.add_argument("--history", action="store_true", help="Ask Shodan for historical banners when available.")
     shodan_parser.add_argument("--minify", action="store_true", help="Return Shodan's compact host response.")
 
+    osint_parser = subparsers.add_parser("osint", help="Run passive OSINT enrichment for a domain, host, URL, or IP.")
+    osint_parser.add_argument("target", help="Domain, host, URL, or IP to enrich.")
+    osint_parser.add_argument("--timeout", type=float, default=10.0, help="API timeout in seconds.")
+    osint_parser.add_argument("--no-crtsh", action="store_true", help="Skip crt.sh certificate name lookup for domains.")
+    osint_parser.add_argument("--shodan", action="store_true", help="Include Shodan enrichment if a key is available.")
+    osint_parser.add_argument("--virustotal", action="store_true", help="Include VirusTotal enrichment if a key is available.")
+    osint_parser.add_argument("--shodan-api-key", help=f"Optional Shodan API key. Defaults to {SHODAN_API_KEY_ENV}.")
+    osint_parser.add_argument("--vt-api-key", help=f"Optional VirusTotal API key. Defaults to {VIRUSTOTAL_API_KEY_ENV}.")
+    osint_parser.add_argument("--output-dir", help="Workspace directory. Defaults to engagements/osint-<host> when used.")
+    osint_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    ip_intel_parser = subparsers.add_parser("ip-intel", aliases=["ip-track"], help="Run passive IP intelligence, ownership, and geolocation lookup.")
+    ip_intel_parser.add_argument("target", help="IP address or hostname to resolve and enrich.")
+    ip_intel_parser.add_argument("--timeout", type=float, default=10.0, help="API timeout in seconds.")
+    ip_intel_parser.add_argument("--shodan", action="store_true", help="Include Shodan enrichment if a key is available.")
+    ip_intel_parser.add_argument("--virustotal", action="store_true", help="Include VirusTotal enrichment if a key is available.")
+    ip_intel_parser.add_argument("--shodan-api-key", help=f"Optional Shodan API key. Defaults to {SHODAN_API_KEY_ENV}.")
+    ip_intel_parser.add_argument("--vt-api-key", help=f"Optional VirusTotal API key. Defaults to {VIRUSTOTAL_API_KEY_ENV}.")
+    ip_intel_parser.add_argument("--output-dir", help="Workspace directory. Defaults to engagements/ip-intel-<ip> when used.")
+    ip_intel_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
     cve_parser = subparsers.add_parser("cve-lookup", aliases=["cve", "nvd"], help="Search the NVD CVE database.")
     cve_parser.add_argument("query", help="CVE ID or keyword query, for example CVE-2024-3094 or 'nginx 1.18'.")
     cve_parser.add_argument("--api-key", help=f"Optional NVD API key. Defaults to {NVD_API_KEY_ENV}.")
@@ -7172,6 +7934,7 @@ def build_parser() -> argparse.ArgumentParser:
     threat_parser.add_argument("--timeout", type=float, default=5.0, help="Network timeout in seconds.")
     threat_parser.add_argument("--fetch-body", action="store_true", help="Fetch a small body sample for IOC and phishing checks.")
     threat_parser.add_argument("--output-markdown", help="Write a takedown evidence report to this path.")
+    threat_parser.add_argument("--output-dir", help="Workspace directory for saved scan output and report artifacts.")
 
     defang_parser = subparsers.add_parser("defang", help="Defang or refang URLs, domains, emails, and IOC values.")
     defang_parser.add_argument("values", nargs="+", help="Values to defang/refang.")
@@ -7584,6 +8347,21 @@ def interactive_menu() -> None:
             elif choice == "30":
                 values = shlex.split(input("IOC values: ").strip())
                 ioc_triage(values)
+            elif choice == "31":
+                target = input("Domain, URL, host, or IP: ").strip()
+                use_shodan = input("Include Shodan if key exists? [y/N]: ").strip().lower() in {"y", "yes"}
+                use_virustotal = input("Include VirusTotal if key exists? [y/N]: ").strip().lower() in {"y", "yes"}
+                output_dir = input("Workspace directory [engagements/osint-<host>]: ").strip() or None
+                osint_lookup(
+                    target,
+                    timeout=10.0,
+                    include_crtsh=True,
+                    shodan_api_key=None,
+                    vt_api_key=None,
+                    use_shodan=use_shodan,
+                    use_virustotal=use_virustotal,
+                    output_dir=output_dir,
+                )
             elif choice == "47":
                 target = input("Authorized host/IP: ").strip()
                 name = input("Engagement name [target]: ").strip() or None
@@ -7657,7 +8435,8 @@ def interactive_menu() -> None:
                 url = input("Suspicious URL: ").strip()
                 fetch_body = input("Fetch body sample? [y/N]: ").strip().lower() in {"y", "yes"}
                 output = input("Markdown report path [optional]: ").strip() or None
-                threat_site_triage(url, timeout=5.0, fetch_body=fetch_body, output_markdown=output)
+                output_dir = input("Workspace directory [engagements/threat-site-<host>]: ").strip() or None
+                threat_site_triage(url, timeout=5.0, fetch_body=fetch_body, output_markdown=output, output_dir=output_dir)
             elif choice == "34":
                 mode = input("Mode (defang/refang) [defang]: ").strip().lower() or "defang"
                 values = shlex.split(input("Values: ").strip())
@@ -7695,11 +8474,26 @@ def interactive_menu() -> None:
             elif choice == "40":
                 category = input(f"SecLists category ({', '.join(sorted(SECLISTS_WORDLISTS))}) [all]: ").strip() or None
                 seclists_find(category)
+            elif choice == "46":
+                target = input("IP or host: ").strip()
+                use_shodan = input("Include Shodan if key exists? [y/N]: ").strip().lower() in {"y", "yes"}
+                use_virustotal = input("Include VirusTotal if key exists? [y/N]: ").strip().lower() in {"y", "yes"}
+                output_dir = input("Workspace directory [engagements/ip-intel-<ip>]: ").strip() or None
+                ip_intel(
+                    target,
+                    timeout=10.0,
+                    shodan_api_key=None,
+                    vt_api_key=None,
+                    use_shodan=use_shodan,
+                    use_virustotal=use_virustotal,
+                    output_dir=output_dir,
+                )
             elif choice == "41":
                 url = input("Base URL (https://example.com): ").strip()
                 tool = input("Tool (gobuster/ffuf/dirb) [gobuster]: ").strip() or "gobuster"
                 wordlist = input("Wordlist path [auto SecLists directory-small]: ").strip() or None
                 dry_run = input("Dry run only? [y/N]: ").strip().lower() in {"y", "yes"}
+                output_dir = input("Workspace directory [engagements/content-discovery-<host>]: ").strip() or None
                 content_discovery(
                     url,
                     tool=tool,
@@ -7714,6 +8508,7 @@ def interactive_menu() -> None:
                     install_missing=False,
                     package_manager=None,
                     dry_run=dry_run,
+                    output_dir=output_dir,
                 )
             elif choice == "42":
                 name = input("Lab/engagement name: ").strip()
@@ -7957,6 +8752,27 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "ioc-triage":
             results = ioc_triage(args.values)
+        elif args.command == "osint":
+            results = osint_lookup(
+                args.target,
+                timeout=args.timeout,
+                include_crtsh=not args.no_crtsh,
+                shodan_api_key=args.shodan_api_key,
+                vt_api_key=args.vt_api_key,
+                use_shodan=args.shodan,
+                use_virustotal=args.virustotal,
+                output_dir=args.output_dir,
+            )
+        elif args.command in {"ip-intel", "ip-track"}:
+            results = ip_intel(
+                args.target,
+                timeout=args.timeout,
+                shodan_api_key=args.shodan_api_key,
+                vt_api_key=args.vt_api_key,
+                use_shodan=args.shodan,
+                use_virustotal=args.virustotal,
+                output_dir=args.output_dir,
+            )
         elif args.command in {"mobile-artifact-audit", "apk-audit"}:
             results = mobile_artifact_audit(
                 args.path,
@@ -8045,6 +8861,7 @@ def main(argv: list[str] | None = None) -> int:
                 install_missing=args.install_missing,
                 package_manager=args.package_manager,
                 dry_run=args.dry_run,
+                output_dir=args.output_dir,
             )
         elif args.command in {"fingerprint", "tls-audit", "dns-enum", "url-discovery"}:
             results = external_web_wrapper(
@@ -8057,6 +8874,7 @@ def main(argv: list[str] | None = None) -> int:
                 install_missing=args.install_missing,
                 package_manager=args.package_manager,
                 dry_run=args.dry_run,
+                output_dir=args.output_dir,
             )
         elif args.command == "web-scan":
             results = external_web_wrapper(
@@ -8069,6 +8887,7 @@ def main(argv: list[str] | None = None) -> int:
                 install_missing=args.install_missing,
                 package_manager=args.package_manager,
                 dry_run=args.dry_run,
+                output_dir=args.output_dir,
             )
         elif args.command == "js-audit":
             results = js_audit(
@@ -8079,6 +8898,7 @@ def main(argv: list[str] | None = None) -> int:
                 install_missing=args.install_missing,
                 package_manager=args.package_manager,
                 dry_run=args.dry_run,
+                output_dir=args.output_dir,
             )
         elif args.command in {"target-brief", "brief"}:
             results = target_brief(
@@ -8107,6 +8927,7 @@ def main(argv: list[str] | None = None) -> int:
                 timeout=args.timeout,
                 fetch_body=args.fetch_body,
                 output_markdown=args.output_markdown,
+                output_dir=args.output_dir,
             )
         elif args.command == "nmap":
             results = nmap_scan(
@@ -8205,6 +9026,9 @@ def main(argv: list[str] | None = None) -> int:
             "conn-watch",
             "log-watch",
             "ioc-triage",
+            "osint",
+            "ip-intel",
+            "ip-track",
             "mobile-artifact-audit",
             "apk-audit",
             "report",
