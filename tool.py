@@ -412,12 +412,10 @@ def print_menu_panel() -> None:
         (
             "START",
             [
-                ("1", "Skill Roadmap"),
+                ("1", "Operator Doctor"),
                 ("2", "Tool Availability Check"),
-                ("46", "Operator Doctor"),
                 ("25", "Install Hints"),
                 ("26", "Install Tool"),
-                ("39", "Workflow Examples"),
                 ("40", "SecLists Finder"),
             ],
         ),
@@ -449,6 +447,8 @@ def print_menu_panel() -> None:
             [
                 ("31", "Live Target Workflow"),
                 ("47", "Target Brief Workflow"),
+                ("48", "Recon Workflow"),
+                ("49", "Web Workflow"),
                 ("42", "Lab Workspace Setup"),
                 ("43", "TryHackMe Room Workflow"),
             ],
@@ -586,7 +586,7 @@ TOOL_CATEGORIES = {
         "title": "Developer Tooling",
         "skills": ["Python project environments", "Build automation", "Task runner integration", "Lab workspace setup"],
         "tools": ["hatch"],
-        "implemented": ["hatch", "lab-init", "external-examples", "seclists-find"],
+        "implemented": ["hatch", "lab-init", "seclists-find"],
     },
     "vps": {
         "title": "VPS Operations",
@@ -863,6 +863,19 @@ class DirectoryResult:
     status: int | None
     length: int | None = None
     error: str | None = None
+
+
+@dataclass
+class NormalizedFinding:
+    finding_id: str
+    title: str
+    severity: str
+    category: str
+    asset: str
+    source: str
+    evidence: str
+    impact: str
+    remediation: str
 
 
 def require_authorization(assume_yes: bool) -> None:
@@ -2489,26 +2502,6 @@ def seclists_find(category: str | None = None) -> dict[str, object]:
     return results
 
 
-def print_external_examples() -> dict[str, object]:
-    examples = {
-        "content-discovery": "ktool content-discovery https://target --tool gobuster --wordlist-kind directory-small --yes-i-am-authorized",
-        "gobuster alias": "ktool gobuster https://target --wordlist /usr/share/seclists/Discovery/Web-Content/common.txt --yes-i-am-authorized",
-        "dirb alias": "ktool dirb https://target --wordlist /usr/share/seclists/Discovery/Web-Content/common.txt --yes-i-am-authorized",
-        "fingerprint": "ktool fingerprint https://target --tools whatweb,wafw00f,httpx --yes-i-am-authorized",
-        "tls-audit": "ktool tls-audit https://target --tools testssl.sh,sslscan --yes-i-am-authorized",
-        "dns-enum": "ktool dns-enum target.tld --tools dnsrecon,subfinder,amass --yes-i-am-authorized",
-        "url-discovery": "ktool url-discovery https://target --tools waybackurls,gau,katana --yes-i-am-authorized",
-        "web-scan": "ktool web-scan https://target --tool nuclei --rate 20 --yes-i-am-authorized",
-        "js-audit": "ktool js-audit https://target --tools retire,semgrep,trufflehog --output js-downloads --yes-i-am-authorized",
-        "lab workspace": "ktool lab-init tryhackme-room --target 10.10.10.10 --client TryHackMe",
-    }
-    print_section("External Tool Examples")
-    print("[i] These wrappers run installed tools only against authorized targets or labs.")
-    for name, command in examples.items():
-        print(f"\n[{name}]\n  {command}")
-    return {"examples": examples, "tool_groups": EXTERNAL_WRAPPER_TOOLS}
-
-
 def run_external_checked(
     tool: str,
     args: list[str],
@@ -2864,6 +2857,7 @@ def target_brief(
         "whois": None,
         "ports": [],
         "web": None,
+        "report_artifacts": None,
     }
 
     results["dns"] = resolve_dns(target)
@@ -2911,8 +2905,533 @@ def target_brief(
     write_json_output(paths["scans"] / "web.json", results["web"])
     summary_path = paths["notes"] / "target-brief.md"
     summary_path.write_text(build_target_brief_markdown(results), encoding="utf-8")
+    web_surface = results.get("web", {}).get("surface", {}) if isinstance(results.get("web"), dict) else {}
+    web_findings = web_surface.get("findings", []) if isinstance(web_surface, dict) else []
+    normalized = normalize_web_findings(inferred_url or target, web_findings, "target-brief") if web_findings else []
+    results["report_artifacts"] = write_client_report_artifacts(
+        paths,
+        "target-brief-client-report",
+        "Target Brief Client Report",
+        inferred_url or target,
+        normalized,
+    )
     write_json_output(paths["reports"] / "target-brief.json", results)
     print(f"\n[+] Target brief saved to {summary_path}")
+    return results
+
+
+def summarize_findings_by_severity(findings: list[dict[str, object]]) -> dict[str, int]:
+    counts = {"high": 0, "medium": 0, "low": 0, "info": 0}
+    for finding in findings:
+        severity = str(finding.get("severity", "info")).lower()
+        counts[severity] = counts.get(severity, 0) + 1
+    return counts
+
+
+def finding_sort_key(finding: NormalizedFinding) -> tuple[int, str, str]:
+    severity_order = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+    return (-severity_order.get(finding.severity, 0), finding.category, finding.title)
+
+
+def finding_identifier(source: str, asset: str, title: str) -> str:
+    raw = f"{source}-{asset}-{title}".lower()
+    return re.sub(r"[^a-z0-9]+", "-", raw).strip("-")[:96]
+
+
+def normalize_finding_evidence(detail: object) -> str:
+    if isinstance(detail, dict):
+        return ", ".join(f"{key}={value}" for key, value in detail.items())
+    return str(detail)
+
+
+def web_header_remediation(header_name: str) -> str:
+    remediation_map = {
+        "Strict-Transport-Security": "Enable HSTS after confirming the site is fully HTTPS-only.",
+        "Content-Security-Policy": "Define a restrictive Content-Security-Policy aligned with deployed scripts and origins.",
+        "X-Frame-Options": "Set X-Frame-Options or CSP frame-ancestors to prevent unwanted framing.",
+        "X-Content-Type-Options": "Set X-Content-Type-Options: nosniff on dynamic and static responses.",
+        "Referrer-Policy": "Set a Referrer-Policy that limits unnecessary URL leakage.",
+        "Permissions-Policy": "Define a Permissions-Policy for browser features the app does not need.",
+    }
+    return remediation_map.get(header_name, f"Add and validate the {header_name} header.")
+
+
+def normalize_web_findings(asset: str, findings: list[dict[str, object]], source: str) -> list[NormalizedFinding]:
+    normalized: list[NormalizedFinding] = []
+    for finding in findings:
+        finding_type = str(finding.get("type", "observation"))
+        severity = str(finding.get("severity", "info")).lower()
+        detail = finding.get("detail", "")
+        evidence = normalize_finding_evidence(detail)
+
+        title = finding_type.replace("_", " ").title()
+        category = "web"
+        impact = "Review the web application control associated with this signal."
+        remediation = "Validate the issue manually and apply the appropriate hardening change."
+
+        if finding_type == "missing_security_header":
+            header_name = str(detail)
+            title = f"Missing Security Header: {header_name}"
+            category = "headers"
+            impact = "Client-side browser protections may be weaker than expected."
+            remediation = web_header_remediation(header_name)
+        elif finding_type == "cookie_flags":
+            title = "Cookie Missing Recommended Security Flags"
+            category = "cookies"
+            impact = "Cookies may be exposed to cross-site access patterns or client-side script access."
+            remediation = "Set Secure, HttpOnly, and SameSite on sensitive cookies where appropriate."
+        elif finding_type == "risky_http_method":
+            title = f"Risky HTTP Method Exposed: {detail}"
+            category = "methods"
+            impact = "Administrative or state-changing methods may be accessible unexpectedly."
+            remediation = "Restrict unnecessary HTTP methods at the application and reverse-proxy layers."
+        elif finding_type in {"cors_misconfiguration", "broad_cors_policy", "cors_null_origin", "broad_cors_exposed_headers"}:
+            title = f"CORS Policy Issue: {str(detail)}"
+            category = "cors"
+            impact = "Cross-origin data access may be broader than intended."
+            remediation = "Tighten allowed origins, credentials use, and exposed headers to documented client requirements."
+        elif finding_type == "directory_listing":
+            title = "Directory Listing Exposed"
+            category = "content"
+            impact = "Unintended file and path disclosure can increase attacker reconnaissance value."
+            remediation = "Disable directory indexing and restrict access to exposed file listings."
+        elif finding_type == "debug_exposure":
+            title = "Debug or Environment Information Exposed"
+            category = "debug"
+            impact = "Debug output can disclose environment, path, and configuration details."
+            remediation = "Disable debug pages and remove diagnostic endpoints from production exposure."
+        elif finding_type == "error_leakage":
+            title = "Application Error Details Exposed"
+            category = "errors"
+            impact = "Stack traces and backend errors may leak implementation details."
+            remediation = "Use generic error handling for clients and log detailed traces only server-side."
+        elif finding_type == "external_form_action":
+            title = "HTML Form Posts to External Host"
+            category = "forms"
+            impact = "Sensitive user data may be submitted to a host outside the primary application boundary."
+            remediation = "Review form handlers and keep sensitive form submissions on controlled origins."
+        elif finding_type == "insecure_form_action":
+            title = "HTML Form Downgrades to HTTP"
+            category = "forms"
+            impact = "Sensitive data may be submitted without transport encryption."
+            remediation = "Ensure all sensitive form actions submit to HTTPS-only endpoints."
+        elif finding_type == "server_header_disclosure":
+            title = "Server Header Disclosure"
+            category = "fingerprinting"
+            impact = "Stack fingerprinting may be easier for unauthenticated users."
+            remediation = "Reduce unnecessary server banner disclosure where operationally practical."
+        elif finding_type == "powered_by_disclosure":
+            title = "Technology Disclosure Header Present"
+            category = "fingerprinting"
+            impact = "Technology stack disclosure can help attacker fingerprinting."
+            remediation = "Remove unnecessary X-Powered-By style headers from production responses."
+        elif finding_type == "exposed_sensitive_path":
+            title = "Potentially Sensitive Path Exposed"
+            category = "content"
+            impact = "Sensitive files or admin/debug paths may be reachable without intended controls."
+            remediation = "Remove, restrict, or monitor access to sensitive files and administrative paths."
+
+        normalized.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, title),
+                title=title,
+                severity=severity,
+                category=category,
+                asset=asset,
+                source=source,
+                evidence=evidence,
+                impact=impact,
+                remediation=remediation,
+            )
+        )
+    return sorted(normalized, key=finding_sort_key)
+
+
+def normalize_recon_findings(asset: str, ports: list[dict[str, object]], source: str) -> list[NormalizedFinding]:
+    normalized: list[NormalizedFinding] = []
+    for item in ports:
+        port = int(item.get("port", 0))
+        service = str(item.get("service") or "unknown")
+        severity = "high" if port in HIGH_RISK_LISTEN_PORTS else "medium" if port in SUSPICIOUS_PORTS else ""
+        if not severity:
+            continue
+        reason = SUSPICIOUS_PORTS.get(port) or "service exposure that usually needs explicit justification"
+        title = f"Potentially Risky Service Exposed on {port}/tcp"
+        normalized.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, title),
+                title=title,
+                severity=severity,
+                category="exposure",
+                asset=asset,
+                source=source,
+                evidence=f"port={port}, service={service}, reason={reason}",
+                impact="Exposed network services increase reachable attack surface and may indicate weak segmentation or unnecessary internet exposure.",
+                remediation="Confirm business need, restrict exposure by source network, and enforce service-specific hardening and monitoring.",
+            )
+        )
+    return sorted(normalized, key=finding_sort_key)
+
+
+def build_client_report_markdown(title: str, asset: str, findings: list[NormalizedFinding]) -> str:
+    counts = summarize_findings_by_severity([asdict(item) for item in findings])
+    lines = [
+        f"# {title}",
+        "",
+        f"- Asset: {asset}",
+        f"- Generated UTC: {datetime.now(timezone.utc).isoformat()}",
+        f"- Total findings: {len(findings)}",
+        f"- Severity summary: high={counts.get('high', 0)}, medium={counts.get('medium', 0)}, low={counts.get('low', 0)}, info={counts.get('info', 0)}",
+        "",
+        "## Executive Summary",
+    ]
+    if findings:
+        lines.append("The workflow identified findings worth operator review and potential client reporting.")
+    else:
+        lines.append("No client-ready findings were generated from this workflow run.")
+
+    lines.extend(
+        [
+            "",
+            "## Findings",
+        ]
+    )
+    if not findings:
+        lines.append("- No findings.")
+    else:
+        for finding in findings:
+            lines.extend(
+                [
+                    "",
+                    f"### {finding.title}",
+                    f"- Severity: {finding.severity.upper()}",
+                    f"- Category: {finding.category}",
+                    f"- Asset: {finding.asset}",
+                    f"- Source: {finding.source}",
+                    f"- Evidence: {finding.evidence}",
+                    f"- Impact: {finding.impact}",
+                    f"- Remediation: {finding.remediation}",
+                ]
+            )
+    return "\n".join(lines) + "\n"
+
+
+def write_client_report_artifacts(
+    paths: dict[str, Path],
+    report_slug: str,
+    title: str,
+    asset: str,
+    findings: list[NormalizedFinding],
+) -> dict[str, str]:
+    findings_path = paths["findings"] / f"{report_slug}.json"
+    report_path = paths["reports"] / f"{report_slug}.md"
+    write_json_output(findings_path, [asdict(item) for item in findings])
+    report_path.write_text(build_client_report_markdown(title, asset, findings), encoding="utf-8")
+    print(f"[+] Client report artifacts saved: {findings_path} and {report_path}")
+    return {"findings": str(findings_path), "report": str(report_path)}
+
+
+def build_recon_workflow_markdown(result: dict[str, object]) -> str:
+    target = str(result.get("target", "unknown"))
+    workspace = str(result.get("workspace", ""))
+    dns = result.get("dns", {}) if isinstance(result.get("dns"), dict) else {}
+    addresses = dns.get("addresses", []) if isinstance(dns.get("addresses"), list) else []
+    subdomains = result.get("subdomains", []) if isinstance(result.get("subdomains"), list) else []
+    ports = result.get("ports", []) if isinstance(result.get("ports"), list) else []
+    open_ports = ", ".join(f"{item['port']}/tcp" for item in ports[:15]) if ports else "none detected"
+    nmap = result.get("nmap", {}) if isinstance(result.get("nmap"), dict) else {}
+    lines = [
+        "# Recon Workflow Summary",
+        "",
+        f"- Target: {target}",
+        f"- Workspace: {workspace}",
+        f"- Generated UTC: {datetime.now(timezone.utc).isoformat()}",
+        f"- Resolved addresses: {', '.join(addresses) if addresses else 'none'}",
+        f"- Resolved subdomains: {len(subdomains)}",
+        f"- Open ports: {open_ports}",
+        "",
+        "## Operator Notes",
+    ]
+    if nmap.get("returncode") == 0:
+        lines.append("- Nmap first pass completed successfully. Review the saved service banner output under scans/.")
+    elif nmap.get("error"):
+        lines.append(f"- Nmap first pass failed or was skipped: {nmap['error']}")
+    else:
+        lines.append("- Nmap first pass was not run.")
+    lines.extend(
+        [
+            "",
+            "## Suggested Next Steps",
+            f"- Review `scans/ports.json` and `scans/nmap-first-pass.json` before moving deeper.",
+            f"- If a web service is present, run `ktool web-workflow https://{target} --yes-i-am-authorized` with the correct URL.",
+            f"- Save evidence and service hypotheses in `notes/README.md` while triaging likely attack surface.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def recon_workflow(
+    target: str,
+    name: str | None,
+    output_dir: str | None,
+    ports: str,
+    wordlist: str | None,
+    timeout: float,
+    top_ports: int,
+    skip_whois: bool,
+    skip_subdomains: bool,
+    skip_nmap: bool,
+    install_missing: bool,
+    package_manager: str | None,
+) -> dict[str, object]:
+    target = validate_host(target)
+    workspace = lab_init(
+        name=name or f"recon-{target}",
+        client="Authorized Assessment",
+        target=target,
+        output_dir=output_dir,
+    )
+    paths = {key: Path(value) for key, value in workspace["paths"].items()}
+    domain_like_target = None
+    try:
+        domain_like_target = target_domain(target)
+    except ValueError:
+        domain_like_target = None
+
+    print_section("Recon Workflow")
+    cyber_line("target", target)
+    cyber_line("workspace", str(paths["base"]))
+
+    results: dict[str, object] = {
+        "target": target,
+        "workspace": str(paths["base"]),
+        "dns": {},
+        "whois": None,
+        "subdomains": [],
+        "ports": [],
+        "nmap": None,
+        "report_artifacts": None,
+    }
+
+    results["dns"] = resolve_dns(target)
+    write_json_output(paths["scans"] / "dns.json", results["dns"])
+
+    if skip_whois:
+        results["whois"] = {"skipped": True}
+    else:
+        try:
+            results["whois"] = whois_lookup(
+                target,
+                timeout=max(timeout * 20, 15.0),
+                install_missing=install_missing,
+                package_manager=package_manager,
+            )
+        except (ValueError, OSError, ConnectionError, TimeoutError) as error:
+            results["whois"] = {"error": str(error)}
+            print(f"[i] WHOIS skipped/failed: {error}")
+    write_json_output(paths["scans"] / "whois.json", results["whois"])
+
+    if skip_subdomains:
+        results["subdomains"] = [{"skipped": True}]
+    elif domain_like_target and not re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", domain_like_target):
+        try:
+            words = load_words(wordlist, DEFAULT_SUBDOMAINS)
+            results["subdomains"] = [asdict(item) for item in subdomain_finder(domain_like_target, words)]
+        except (ValueError, OSError) as error:
+            results["subdomains"] = [{"error": str(error)}]
+            print(f"[i] Subdomain resolution skipped/failed: {error}")
+    else:
+        results["subdomains"] = [{"skipped": True, "reason": "Target is not a domain name."}]
+    write_json_output(paths["scans"] / "subdomains.json", results["subdomains"])
+
+    results["ports"] = [asdict(item) for item in port_scanner(target, parse_ports(ports), timeout=timeout, workers=64, delay=0.0)]
+    write_json_output(paths["scans"] / "ports.json", results["ports"])
+
+    if skip_nmap:
+        results["nmap"] = {"skipped": True}
+    else:
+        try:
+            results["nmap"] = nmap_scan(
+                target,
+                top_ports=top_ports,
+                timeout=max(120.0, timeout * 120),
+                scripts=True,
+                os_detect=False,
+                install_missing=install_missing,
+                package_manager=package_manager,
+            )
+        except (ValueError, OSError, ConnectionError, TimeoutError) as error:
+            results["nmap"] = {"error": str(error)}
+            print(f"[i] Nmap skipped/failed: {error}")
+    write_json_output(paths["scans"] / "nmap-first-pass.json", results["nmap"])
+
+    summary_path = paths["notes"] / "recon-summary.md"
+    summary_path.write_text(build_recon_workflow_markdown(results), encoding="utf-8")
+    normalized = normalize_recon_findings(target, results["ports"], "recon-workflow")
+    results["report_artifacts"] = write_client_report_artifacts(
+        paths,
+        "recon-client-report",
+        "Recon Workflow Client Report",
+        target,
+        normalized,
+    )
+    write_json_output(paths["reports"] / "recon-workflow.json", results)
+    print(f"\n[+] Recon workflow saved to {summary_path}")
+    return results
+
+
+def build_web_workflow_markdown(result: dict[str, object]) -> str:
+    url = str(result.get("url", "unknown"))
+    workspace = str(result.get("workspace", ""))
+    baseline = result.get("baseline", {}) if isinstance(result.get("baseline"), dict) else {}
+    search = result.get("web_search", {}) if isinstance(result.get("web_search"), dict) else {}
+    findings = search.get("findings", []) if isinstance(search.get("findings"), list) else []
+    counts = summarize_findings_by_severity(findings)
+    technologies = search.get("technologies", []) if isinstance(search.get("technologies"), list) else []
+    lines = [
+        "# Web Workflow Summary",
+        "",
+        f"- URL: {url}",
+        f"- Workspace: {workspace}",
+        f"- Generated UTC: {datetime.now(timezone.utc).isoformat()}",
+        f"- Technologies: {', '.join(str(item) for item in technologies) if technologies else 'none inferred'}",
+        f"- Findings: high={counts.get('high', 0)}, medium={counts.get('medium', 0)}, low={counts.get('low', 0)}",
+        "",
+        "## Highlights",
+    ]
+    if findings:
+        for finding in findings[:10]:
+            lines.append(f"- {str(finding['severity']).upper()}: {finding['type']} -> {finding['detail']}")
+    else:
+        lines.append("- No obvious baseline web issues were detected in the current run.")
+
+    surface = baseline.get("surface", {}) if isinstance(baseline.get("surface"), dict) else {}
+    html_summary = surface.get("html_summary", {}) if isinstance(surface.get("html_summary"), dict) else {}
+    lines.extend(
+        [
+            "",
+            "## HTML Summary",
+            f"- Title: {html_summary.get('page_title') or 'n/a'}",
+            f"- Forms: {html_summary.get('forms', 0)}",
+            f"- Password fields: {html_summary.get('password_fields', 0)}",
+            "",
+            "## Suggested Next Steps",
+            "- Review saved JSON artifacts before running any heavier authorized scans.",
+            "- If the app is in scope, validate auth, session handling, and exposed admin/debug paths manually.",
+            "- Use the saved workspace to separate confirmed findings from first-pass signals.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def web_workflow(
+    url: str,
+    name: str | None,
+    output_dir: str | None,
+    timeout: float,
+    delay: float,
+    use_searchsploit: bool,
+    use_nikto: bool,
+    nikto_timeout: float,
+    run_fingerprint: bool,
+    run_tls_audit: bool,
+    run_js_audit: bool,
+    install_missing: bool,
+    package_manager: str | None,
+) -> dict[str, object]:
+    normalized = normalize_url(url)
+    workspace = lab_init(
+        name=name or f"web-{target_domain(normalized)}",
+        client="Authorized Assessment",
+        target=normalized,
+        output_dir=output_dir,
+    )
+    paths = {key: Path(value) for key, value in workspace["paths"].items()}
+
+    print_section("Web Workflow")
+    cyber_line("url", normalized)
+    cyber_line("workspace", str(paths["base"]))
+
+    results: dict[str, object] = {
+        "url": normalized,
+        "workspace": str(paths["base"]),
+        "baseline": {},
+        "web_search": {},
+        "fingerprint": None,
+        "tls_audit": None,
+        "js_audit": None,
+        "report_artifacts": None,
+    }
+
+    results["baseline"] = web_baseline(normalized, timeout=timeout, delay=delay)
+    write_json_output(paths["scans"] / "web-baseline.json", results["baseline"])
+
+    results["web_search"] = web_vulnerability_search(
+        normalized,
+        timeout=timeout,
+        delay=delay,
+        use_searchsploit=use_searchsploit,
+        use_nikto=use_nikto,
+        nikto_timeout=nikto_timeout,
+    )
+    write_json_output(paths["scans"] / "web-search.json", results["web_search"])
+
+    if run_fingerprint:
+        results["fingerprint"] = external_web_wrapper(
+            "fingerprint",
+            target=normalized,
+            tools_value="whatweb,wafw00f,httpx",
+            timeout=max(timeout * 20, 120.0),
+            rate=20,
+            output=str(paths["scans"] / "fingerprint.txt"),
+            install_missing=install_missing,
+            package_manager=package_manager,
+            dry_run=False,
+        )
+        write_json_output(paths["scans"] / "fingerprint.json", results["fingerprint"])
+
+    if run_tls_audit and urlparse(normalized).scheme == "https":
+        results["tls_audit"] = external_web_wrapper(
+            "tls-audit",
+            target=normalized,
+            tools_value="testssl.sh,sslscan",
+            timeout=max(timeout * 40, 300.0),
+            rate=20,
+            output=str(paths["scans"] / "tls-audit.txt"),
+            install_missing=install_missing,
+            package_manager=package_manager,
+            dry_run=False,
+        )
+        write_json_output(paths["scans"] / "tls-audit.json", results["tls_audit"])
+
+    if run_js_audit:
+        results["js_audit"] = js_audit(
+            normalized,
+            tools_value="retire,semgrep,trufflehog",
+            output=str(paths["scans"] / "js-downloads"),
+            timeout=max(timeout * 20, 120.0),
+            install_missing=install_missing,
+            package_manager=package_manager,
+            dry_run=False,
+        )
+        write_json_output(paths["scans"] / "js-audit.json", results["js_audit"])
+
+    summary_path = paths["notes"] / "web-summary.md"
+    summary_path.write_text(build_web_workflow_markdown(results), encoding="utf-8")
+    normalized_findings = normalize_web_findings(
+        normalized,
+        results.get("web_search", {}).get("findings", []) if isinstance(results.get("web_search"), dict) else [],
+        "web-workflow",
+    )
+    results["report_artifacts"] = write_client_report_artifacts(
+        paths,
+        "web-client-report",
+        "Web Workflow Client Report",
+        normalized,
+        normalized_findings,
+    )
+    write_json_output(paths["reports"] / "web-workflow.json", results)
+    print(f"\n[+] Web workflow saved to {summary_path}")
     return results
 
 
@@ -5324,37 +5843,6 @@ def doctor(categories: list[str] | None = None) -> dict[str, object]:
     }
 
 
-def print_roadmap(category: str | None = None) -> dict[str, object]:
-    selected_keys = [category] if category else list(TOOL_CATEGORIES)
-    unknown = [key for key in selected_keys if key not in TOOL_CATEGORIES]
-    if unknown:
-        raise ValueError(f"Unknown category: {', '.join(unknown)}")
-
-    print(f"\n=== {TOOL_NAME} Skill Roadmap ===")
-    print("Use every active test only on owned systems, written-scope targets, or labs.")
-    print(f"{TOOL_NAME} does not automate brute force, phishing, persistence, or exploitation.")
-
-    payload: dict[str, object] = {}
-    for key in selected_keys:
-        details = TOOL_CATEGORIES[key]
-        payload[key] = details
-        print(f"\n[{key}] {details['title']}")
-        print("  Skills:")
-        for skill in details["skills"]:
-            print(f"    - {skill}")
-        print("  Tools to learn:")
-        for tool in details["tools"]:
-            print(f"    - {tool}")
-        print("  Implemented here:")
-        for item in details["implemented"]:
-            print(f"    - {item}")
-
-        if key in {"passwords", "exploitation", "awareness", "post", "wireless"}:
-            print("  Safety boundary: use dedicated labs and do not target real users or third-party systems.")
-
-    return payload
-
-
 def save_report(path: str | None, command: str, data: Iterable[object] | object) -> None:
     if not path:
         return
@@ -5398,18 +5886,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--report", help="Write JSON report to this path.")
 
     subparsers = parser.add_subparsers(dest="command")
-
-    roadmap_parser = subparsers.add_parser("roadmap", help="Show the skill roadmap and tool coverage.")
-    roadmap_parser.add_argument(
-        "--category",
-        choices=sorted(TOOL_CATEGORIES),
-        help="Show one category only.",
-    )
-    roadmap_parser.add_argument(
-        "--report",
-        default=argparse.SUPPRESS,
-        help="Write JSON report to this path.",
-    )
 
     tools_parser = subparsers.add_parser("tools", help="Check whether common Linux tools are installed.")
     tools_parser.add_argument(
@@ -5545,9 +6021,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     web_vuln_parser.add_argument("--nikto-timeout", type=float, default=180.0, help="Nikto timeout in seconds.")
 
-    examples_parser = subparsers.add_parser("external-examples", help="Show real-world lab wrapper examples.")
-    examples_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
-
     seclists_parser = subparsers.add_parser("seclists-find", help="Find installed SecLists roots and common wordlists.")
     seclists_parser.add_argument("--category", choices=sorted(SECLISTS_WORDLISTS), help="Show one wordlist category.")
     seclists_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
@@ -5657,6 +6130,41 @@ def build_parser() -> argparse.ArgumentParser:
     brief_parser.add_argument("--timeout", type=float, default=0.7, help="Socket timeout in seconds for first-pass checks.")
     brief_parser.add_argument("--skip-whois", action="store_true", help="Skip WHOIS lookup.")
     brief_parser.add_argument("--skip-web", action="store_true", help="Skip web header/path checks.")
+
+    recon_workflow_parser = subparsers.add_parser(
+        "recon-workflow",
+        help="Create a workspace and run an authorized recon workflow with saved artifacts.",
+    )
+    add_common_run_options(recon_workflow_parser)
+    add_install_options(recon_workflow_parser)
+    recon_workflow_parser.add_argument("target", help="Authorized hostname or IP address.")
+    recon_workflow_parser.add_argument("--name", help="Engagement name. Defaults to recon-<target>.")
+    recon_workflow_parser.add_argument("--output-dir", help="Workspace directory. Defaults to engagements/<name>.")
+    recon_workflow_parser.add_argument("--ports", default="common", help="Port list, range, or 'common'.")
+    recon_workflow_parser.add_argument("--wordlist", help="Optional subdomain wordlist path.")
+    recon_workflow_parser.add_argument("--timeout", type=float, default=0.7, help="Socket timeout in seconds.")
+    recon_workflow_parser.add_argument("--top-ports", type=int, default=1000, help="Top ports for the nmap first pass.")
+    recon_workflow_parser.add_argument("--skip-whois", action="store_true", help="Skip WHOIS lookup.")
+    recon_workflow_parser.add_argument("--skip-subdomains", action="store_true", help="Skip subdomain resolution.")
+    recon_workflow_parser.add_argument("--skip-nmap", action="store_true", help="Skip the nmap first pass.")
+
+    web_workflow_parser = subparsers.add_parser(
+        "web-workflow",
+        help="Create a workspace and run an authorized web assessment workflow with saved artifacts.",
+    )
+    add_common_run_options(web_workflow_parser)
+    add_install_options(web_workflow_parser)
+    web_workflow_parser.add_argument("url", help="Authorized base URL.")
+    web_workflow_parser.add_argument("--name", help="Engagement name. Defaults to web-<host>.")
+    web_workflow_parser.add_argument("--output-dir", help="Workspace directory. Defaults to engagements/<name>.")
+    web_workflow_parser.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout in seconds.")
+    web_workflow_parser.add_argument("--delay", type=float, default=0.2, help="Delay between passive path checks.")
+    web_workflow_parser.add_argument("--no-searchsploit", action="store_true", help="Skip local Exploit-DB metadata lookup.")
+    web_workflow_parser.add_argument("--nikto", action="store_true", help="Run Nikto if installed. This is active traffic.")
+    web_workflow_parser.add_argument("--nikto-timeout", type=float, default=180.0, help="Nikto timeout in seconds.")
+    web_workflow_parser.add_argument("--fingerprint", action="store_true", help="Run installed fingerprinting tools such as whatweb and httpx.")
+    web_workflow_parser.add_argument("--tls-audit", action="store_true", help="Run installed TLS review tools for HTTPS targets.")
+    web_workflow_parser.add_argument("--js-audit", action="store_true", help="Download same-page JavaScript and run local audit tools.")
 
     thm_parser = subparsers.add_parser(
         "tryhackme",
@@ -5956,11 +6464,9 @@ def interactive_menu() -> None:
                 print_exit_screen("Session closed from the interactive menu.", 0)
                 break
             elif choice == "1":
-                print_roadmap()
+                doctor()
             elif choice == "2":
                 check_tools()
-            elif choice == "46":
-                doctor()
             elif choice == "3":
                 domain = input("Domain/host: ").strip()
                 resolve_dns(domain)
@@ -6135,6 +6641,51 @@ def interactive_menu() -> None:
                     install_missing=False,
                     package_manager=None,
                 )
+            elif choice == "48":
+                target = input("Authorized host/IP: ").strip()
+                name = input("Engagement name [recon-<target>]: ").strip() or None
+                output_dir = input("Workspace directory [engagements/<name>]: ").strip() or None
+                ports = input("Ports [common]: ").strip() or "common"
+                skip_whois = input("Skip WHOIS? [y/N]: ").strip().lower() in {"y", "yes"}
+                skip_subdomains = input("Skip subdomains? [y/N]: ").strip().lower() in {"y", "yes"}
+                skip_nmap = input("Skip nmap? [y/N]: ").strip().lower() in {"y", "yes"}
+                recon_workflow(
+                    target=target,
+                    name=name,
+                    output_dir=output_dir,
+                    ports=ports,
+                    wordlist=None,
+                    timeout=0.7,
+                    top_ports=1000,
+                    skip_whois=skip_whois,
+                    skip_subdomains=skip_subdomains,
+                    skip_nmap=skip_nmap,
+                    install_missing=False,
+                    package_manager=None,
+                )
+            elif choice == "49":
+                url = input("Authorized base URL: ").strip()
+                name = input("Engagement name [web-<host>]: ").strip() or None
+                output_dir = input("Workspace directory [engagements/<name>]: ").strip() or None
+                run_fingerprint = input("Run fingerprint tools? [y/N]: ").strip().lower() in {"y", "yes"}
+                run_tls_audit = input("Run TLS audit tools? [y/N]: ").strip().lower() in {"y", "yes"}
+                run_js_audit = input("Run JS audit? [y/N]: ").strip().lower() in {"y", "yes"}
+                use_nikto = input("Run Nikto if installed? [y/N]: ").strip().lower() in {"y", "yes"}
+                web_workflow(
+                    url=url,
+                    name=name,
+                    output_dir=output_dir,
+                    timeout=5.0,
+                    delay=0.2,
+                    use_searchsploit=True,
+                    use_nikto=use_nikto,
+                    nikto_timeout=180.0,
+                    run_fingerprint=run_fingerprint,
+                    run_tls_audit=run_tls_audit,
+                    run_js_audit=run_js_audit,
+                    install_missing=False,
+                    package_manager=None,
+                )
             elif choice == "32":
                 args = shlex.split(input("Hatch args [--version]: ").strip() or "--version")
                 install_missing = input("Install Hatch if missing? [y/N]: ").strip().lower() in {"y", "yes"}
@@ -6172,8 +6723,6 @@ def interactive_menu() -> None:
             elif choice == "38":
                 path = input("APK, decompiled APK folder, or repo path: ").strip()
                 mobile_artifact_audit(path, max_files=800, max_bytes=250000, include_all_iocs=False)
-            elif choice == "39":
-                print_external_examples()
             elif choice == "40":
                 category = input(f"SecLists category ({', '.join(sorted(SECLISTS_WORDLISTS))}) [all]: ").strip() or None
                 seclists_find(category)
@@ -6241,9 +6790,7 @@ def main(argv: list[str] | None = None) -> int:
             interactive_menu()
             return 0
 
-        if args.command == "roadmap":
-            results = print_roadmap(args.category)
-        elif args.command == "tools":
+        if args.command == "tools":
             results = check_tools(args.category)
         elif args.command == "doctor":
             results = doctor(args.category)
@@ -6262,8 +6809,6 @@ def main(argv: list[str] | None = None) -> int:
                 timeout=args.timeout,
                 dry_run=args.dry_run,
             )
-        elif args.command == "external-examples":
-            results = print_external_examples()
         elif args.command == "seclists-find":
             results = seclists_find(args.category)
         elif args.command in {"lab-init", "engagement-init"}:
@@ -6272,6 +6817,39 @@ def main(argv: list[str] | None = None) -> int:
                 client=args.client,
                 target=args.target,
                 output_dir=args.output_dir,
+            )
+        elif args.command == "recon-workflow":
+            require_authorization(args.yes_i_am_authorized)
+            results = recon_workflow(
+                target=args.target,
+                name=args.name,
+                output_dir=args.output_dir,
+                ports=args.ports,
+                wordlist=args.wordlist,
+                timeout=args.timeout,
+                top_ports=args.top_ports,
+                skip_whois=args.skip_whois,
+                skip_subdomains=args.skip_subdomains,
+                skip_nmap=args.skip_nmap,
+                install_missing=args.install_missing,
+                package_manager=args.package_manager,
+            )
+        elif args.command == "web-workflow":
+            require_authorization(args.yes_i_am_authorized)
+            results = web_workflow(
+                url=args.url,
+                name=args.name,
+                output_dir=args.output_dir,
+                timeout=args.timeout,
+                delay=args.delay,
+                use_searchsploit=not args.no_searchsploit,
+                use_nikto=args.nikto,
+                nikto_timeout=args.nikto_timeout,
+                run_fingerprint=args.fingerprint,
+                run_tls_audit=args.tls_audit,
+                run_js_audit=args.js_audit,
+                install_missing=args.install_missing,
+                package_manager=args.package_manager,
             )
         elif args.command in {"tryhackme", "thm"}:
             require_authorization(args.yes_i_am_authorized)
@@ -6593,7 +7171,6 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "vuln-lookup":
             results = vuln_lookup(args.query, timeout=args.timeout)
         elif args.command in {
-            "roadmap",
             "tools",
             "doctor",
             "install-hints",
@@ -6601,12 +7178,13 @@ def main(argv: list[str] | None = None) -> int:
             "install-tools",
             "sudo-su",
             "hatch",
-            "external-examples",
             "seclists-find",
             "lab-init",
             "engagement-init",
             "target-brief",
             "brief",
+            "recon-workflow",
+            "web-workflow",
             "tryhackme",
             "thm",
             "password-audit",

@@ -64,8 +64,10 @@ Useful shortcuts inside the menu:
 
 - `?` or `help`: show shortcut guidance
 - `q`, `quit`, or `exit`: leave the console
-- `46`: run `doctor`
+- `1`: run `doctor`
 - `47`: run the `target-brief` workflow
+- `48`: run the `recon-workflow`
+- `49`: run the `web-workflow`
 
 ## Core Workflows
 
@@ -99,6 +101,22 @@ Use the built-in room workflow for first-pass lab setup and safe enumeration:
 ```bash
 ktool thm --room steel-mountain --target 10.10.10.10 --yes-i-am-authorized
 ktool tryhackme --room steel-mountain --target 10.10.10.10 --content-scan --yes-i-am-authorized
+```
+
+### 4. Recon Workflow
+
+Use this when you want a real first-pass host workflow with saved artifacts and a client-ready report:
+
+```bash
+ktool recon-workflow example.com --yes-i-am-authorized
+```
+
+### 5. Web Workflow
+
+Use this when a web app is in scope and you want baseline, findings, and reporting in one run:
+
+```bash
+ktool web-workflow https://example.com --fingerprint --tls-audit --js-audit --yes-i-am-authorized
 ```
 
 ## Common Commands
@@ -174,6 +192,8 @@ Report behavior:
 - JSON output is normalized for nested objects and dataclasses
 - parent directories are created automatically
 - sensitive outputs such as generated passwords are written with mode `0600`
+- `target-brief`, `recon-workflow`, and `web-workflow` also write normalized findings under `findings/`
+- workflow runs also generate client-ready Markdown reports under `reports/`
 
 ## External Tool Wrappers
 
@@ -194,7 +214,6 @@ Find supporting wordlists and wrappers:
 
 ```bash
 ktool seclists-find
-ktool external-examples
 ktool install-hints seclists
 ktool install-tools --category web --manager apt
 ```
