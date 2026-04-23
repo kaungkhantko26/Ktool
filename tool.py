@@ -23,6 +23,7 @@ import pty
 import re
 import select
 import secrets
+import signal
 import shlex
 import shutil
 import socket
@@ -4337,13 +4338,24 @@ def parse_vps_ssh_input(value: str) -> tuple[str | None, int | None, str | None]
 
 
 def prompt_vps_password() -> str | None:
-    password = getpass.getpass("SSH login password [blank = let ssh ask]: ")
+    try:
+        password = getpass.getpass("SSH login password [blank = key/agent]: ")
+    except (EOFError, KeyboardInterrupt):
+        print("\n[i] SSH password prompt skipped; falling back to key/agent auth.")
+        return None
     return password or None
 
 
-def run_interactive_ssh(command: list[str], password: str | None = None) -> int:
-    if not password:
-        return subprocess.run(command, check=False).returncode
+def run_interactive_pty(
+    command: list[str],
+    password: str,
+    timeout: float | None = None,
+    forward_stdin: bool = True,
+    echo_output: bool = True,
+) -> tuple[int, str]:
+    output_chunks: list[str] = []
+    timed_out = False
+    deadline = time.monotonic() + timeout if timeout is not None else None
 
     pid, fd = pty.fork()
     if pid == 0:
@@ -4351,13 +4363,24 @@ def run_interactive_ssh(command: list[str], password: str | None = None) -> int:
 
     password_sent = False
     prompt_buffer = ""
-    stdin_fd = sys.stdin.fileno() if sys.stdin.isatty() else None
+    stdin_fd = sys.stdin.fileno() if forward_stdin and sys.stdin.isatty() else None
     try:
         while True:
+            select_timeout: float | None = None
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                select_timeout = remaining
+
             read_fds = [fd]
             if stdin_fd is not None:
                 read_fds.append(stdin_fd)
-            ready, _, _ = select.select(read_fds, [], [])
+            ready, _, _ = select.select(read_fds, [], [], select_timeout)
+            if not ready and deadline is not None and time.monotonic() >= deadline:
+                timed_out = True
+                break
 
             if fd in ready:
                 try:
@@ -4366,9 +4389,12 @@ def run_interactive_ssh(command: list[str], password: str | None = None) -> int:
                     break
                 if not data:
                     break
-                sys.stdout.buffer.write(data)
-                sys.stdout.buffer.flush()
-                prompt_buffer = (prompt_buffer + data.decode(errors="ignore"))[-500:].lower()
+                decoded = data.decode(errors="replace")
+                output_chunks.append(decoded)
+                if echo_output:
+                    sys.stdout.buffer.write(data)
+                    sys.stdout.buffer.flush()
+                prompt_buffer = (prompt_buffer + decoded)[-500:].lower()
                 if not password_sent and "password:" in prompt_buffer:
                     os.write(fd, (password + "\n").encode())
                     password_sent = True
@@ -4385,8 +4411,24 @@ def run_interactive_ssh(command: list[str], password: str | None = None) -> int:
         except OSError:
             pass
 
+    if timed_out:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
     _, status = os.waitpid(pid, 0)
-    return os.waitstatus_to_exitcode(status)
+    if timed_out:
+        output_chunks.append(f"\n[ERROR] Command timed out after {timeout}s.")
+        return 124, "".join(output_chunks)
+    return os.waitstatus_to_exitcode(status), "".join(output_chunks)
+
+
+def run_interactive_ssh(command: list[str], password: str | None = None) -> int:
+    if not password:
+        return subprocess.run(command, check=False).returncode
+    returncode, _ = run_interactive_pty(command, password, timeout=None, forward_stdin=True, echo_output=True)
+    return returncode
 
 
 def run_vps_script(
@@ -4395,6 +4437,7 @@ def run_vps_script(
     host: str | None,
     ssh_port: int,
     identity: str | None,
+    ssh_password: str | None,
     timeout: float,
     dry_run: bool,
 ) -> dict[str, object]:
@@ -4402,7 +4445,7 @@ def run_vps_script(
         ssh_path = find_tool("ssh")
         if not ssh_path and not dry_run:
             raise ValueError("ssh is not installed. Install OpenSSH client or run local VPS checks on the server.")
-        command = vps_ssh_base(host, ssh_port, identity)
+        command = vps_ssh_base(host, ssh_port, identity, batch_mode=ssh_password is None)
         command[0] = ssh_path or "ssh"
         command.append(script)
     else:
@@ -4412,6 +4455,25 @@ def run_vps_script(
     print(color("$ " + " ".join(shlex.quote(part) for part in command), "90"))
     if dry_run:
         return {"label": label, "command": command, "executed": False}
+
+    if host and ssh_password:
+        returncode, output = run_interactive_pty(
+            command,
+            ssh_password,
+            timeout=timeout,
+            forward_stdin=True,
+            echo_output=True,
+        )
+        if not output.strip():
+            print("No output.")
+        return {
+            "label": label,
+            "command": command,
+            "executed": True,
+            "returncode": returncode,
+            "stdout": output,
+            "stderr": "",
+        }
 
     result = run_external(command, timeout=timeout)
     output = result.stdout.strip() or result.stderr.strip()
@@ -4518,6 +4580,7 @@ def vps_check(
     host: str | None,
     ssh_port: int,
     identity: str | None,
+    ssh_password: str | None,
     paths: list[str] | None,
     services: list[str] | None,
     include_pm2: bool,
@@ -4552,6 +4615,7 @@ def vps_check(
         [
             ("target", target),
             ("mode", "ssh" if host else "local"),
+            ("auth", "password prompt" if host and ssh_password else "key/agent or local"),
             ("checks", ", ".join(selected_checks)),
             ("pm2", "enabled" if include_pm2 else "skipped"),
             ("docker", "enabled" if include_docker else "skipped"),
@@ -4648,6 +4712,7 @@ def vps_check(
             host=host,
             ssh_port=ssh_port,
             identity=identity,
+            ssh_password=ssh_password,
             timeout=timeout,
             dry_run=dry_run,
         )
@@ -4657,6 +4722,7 @@ def vps_check(
     return {
         "target": target,
         "mode": "ssh" if host else "local",
+        "auth": "password prompt" if host and ssh_password else "key/agent or local",
         "paths": selected_paths,
         "services": selected_services,
         "include_pm2": include_pm2,
@@ -4671,6 +4737,7 @@ def vps_check(
 def vps_console() -> None:
     print_vps_banner()
     host, ssh_port, identity = prompt_vps_connection()
+    ssh_password = prompt_vps_password() if host else None
     while True:
         print_vps_menu()
         choice = input(color("vps> ", "1;34")).strip()
@@ -4678,27 +4745,28 @@ def vps_console() -> None:
             if choice == "1":
                 if not host:
                     host, ssh_port, identity = prompt_vps_connection(require_host=True)
+                    ssh_password = prompt_vps_password()
                 vps_login_command(host, ssh_port, identity, connect=True, ask_password=True)
             elif choice == "2":
-                vps_check(host, ssh_port, identity, None, None, True, include_logs=False, include_docker=False, timeout=30.0, dry_run=False)
+                vps_check(host, ssh_port, identity, ssh_password, None, None, True, include_logs=False, include_docker=False, timeout=30.0, dry_run=False)
             elif choice == "3":
-                vps_check(host, ssh_port, identity, None, None, False, include_logs=False, include_docker=False, timeout=30.0, dry_run=False, check_types=["storage"])
+                vps_check(host, ssh_port, identity, ssh_password, None, None, False, include_logs=False, include_docker=False, timeout=30.0, dry_run=False, check_types=["storage"])
             elif choice == "4":
-                vps_check(host, ssh_port, identity, None, None, False, include_logs=False, include_docker=False, timeout=30.0, dry_run=False, check_types=["summary", "usage", "network"])
+                vps_check(host, ssh_port, identity, ssh_password, None, None, False, include_logs=False, include_docker=False, timeout=30.0, dry_run=False, check_types=["summary", "usage", "network"])
             elif choice == "5":
-                vps_check(host, ssh_port, identity, None, None, True, include_logs=False, include_docker=False, timeout=30.0, dry_run=False, check_types=["pm2"])
+                vps_check(host, ssh_port, identity, ssh_password, None, None, True, include_logs=False, include_docker=False, timeout=30.0, dry_run=False, check_types=["pm2"])
             elif choice == "6":
                 path_text = input("Directories [/var/www,/home,/root]: ").strip()
                 paths = [item.strip() for item in path_text.split(",") if item.strip()] if path_text else ["/var/www", "/home", "/root"]
-                vps_check(host, ssh_port, identity, paths, None, False, include_logs=False, include_docker=False, timeout=30.0, dry_run=False, check_types=["ls"])
+                vps_check(host, ssh_port, identity, ssh_password, paths, None, False, include_logs=False, include_docker=False, timeout=30.0, dry_run=False, check_types=["ls"])
             elif choice == "7":
                 service_text = input("Services [nginx,pm2,docker]: ").strip()
                 services = [item.strip() for item in service_text.split(",") if item.strip()] if service_text else ["nginx", "pm2", "docker"]
-                vps_check(host, ssh_port, identity, None, services, False, include_logs=False, include_docker=False, timeout=30.0, dry_run=False, check_types=["services"])
+                vps_check(host, ssh_port, identity, ssh_password, None, services, False, include_logs=False, include_docker=False, timeout=30.0, dry_run=False, check_types=["services"])
             elif choice == "8":
-                vps_check(host, ssh_port, identity, None, None, True, include_logs=True, include_docker=False, timeout=30.0, dry_run=False, check_types=["logs"])
+                vps_check(host, ssh_port, identity, ssh_password, None, None, True, include_logs=True, include_docker=False, timeout=30.0, dry_run=False, check_types=["logs"])
             elif choice == "9":
-                vps_check(host, ssh_port, identity, None, None, False, include_logs=False, include_docker=True, timeout=30.0, dry_run=False, check_types=["docker"])
+                vps_check(host, ssh_port, identity, ssh_password, None, None, False, include_logs=False, include_docker=True, timeout=30.0, dry_run=False, check_types=["docker"])
             elif choice == "10":
                 return
             else:
@@ -5278,6 +5346,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run only this VPS check type. Can be used more than once.",
     )
     vps_parser.add_argument("--timeout", type=float, default=30.0, help="Timeout per check in seconds.")
+    vps_parser.add_argument("--ask-password", action="store_true", help="Prompt for an SSH password for remote checks.")
     vps_parser.add_argument("--dry-run", action="store_true", help="Print the local/SSH commands without running checks.")
     vps_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
@@ -5308,6 +5377,7 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--path", action="append", help="Directory to list and size-check. Can be used more than once.")
         subparser.add_argument("--service", action="append", help="systemd service to inspect. Can be used more than once.")
         subparser.add_argument("--timeout", type=float, default=30.0, help="Timeout per check in seconds.")
+        subparser.add_argument("--ask-password", action="store_true", help="Prompt for an SSH password for remote checks.")
         subparser.add_argument("--dry-run", action="store_true", help="Print the local/SSH commands without running checks.")
         subparser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
@@ -5708,10 +5778,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "local-posture":
             results = local_posture()
         elif args.command in {"vps-check", "vps", "vps-health"}:
+            ssh_password = prompt_vps_password() if args.host and args.ask_password else None
             results = vps_check(
                 host=args.host,
                 ssh_port=args.ssh_port,
                 identity=args.identity,
+                ssh_password=ssh_password,
                 paths=args.path,
                 services=args.service,
                 include_pm2=args.include_pm2,
@@ -5742,10 +5814,12 @@ def main(argv: list[str] | None = None) -> int:
                 "vps-logs": ["logs"],
                 "vps-docker": ["docker"],
             }
+            ssh_password = prompt_vps_password() if args.host and args.ask_password else None
             results = vps_check(
                 host=args.host,
                 ssh_port=args.ssh_port,
                 identity=args.identity,
+                ssh_password=ssh_password,
                 paths=args.path,
                 services=args.service,
                 include_pm2=args.command in {"vps-pm2", "vps-logs"},
