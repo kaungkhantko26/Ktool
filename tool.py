@@ -445,7 +445,6 @@ def print_menu_panel() -> None:
         (
             "LABS",
             [
-                ("31", "Live Target Workflow"),
                 ("47", "Target Brief Workflow"),
                 ("48", "Recon Workflow"),
                 ("49", "Web Workflow"),
@@ -460,8 +459,8 @@ def print_menu_panel() -> None:
                 ("12", "Scapy Packet Sniffer"),
                 ("20", "Packet Capture"),
                 ("21", "Wireless Interface Info"),
-                ("24", "Local Posture Review"),
-                ("44", "VPS Health Check"),
+                ("24", "Local Posture Workflow"),
+                ("44", "VPS Health Workflow"),
                 ("28", "Live Connection Watch"),
                 ("29", "Log Watch"),
                 ("30", "IOC Triage"),
@@ -552,7 +551,6 @@ TOOL_CATEGORIES = {
             "conn-watch",
             "log-watch",
             "ioc-triage",
-            "live-workflow",
             "sudo-su",
             "permission-guide",
             "tools",
@@ -2921,7 +2919,7 @@ def target_brief(
 
 
 def summarize_findings_by_severity(findings: list[dict[str, object]]) -> dict[str, int]:
-    counts = {"high": 0, "medium": 0, "low": 0, "info": 0}
+    counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for finding in findings:
         severity = str(finding.get("severity", "info")).lower()
         counts[severity] = counts.get(severity, 0) + 1
@@ -2973,61 +2971,78 @@ def normalize_web_findings(asset: str, findings: list[dict[str, object]], source
             header_name = str(detail)
             title = f"Missing Security Header: {header_name}"
             category = "headers"
+            severity = "medium" if header_name in {"Strict-Transport-Security", "Content-Security-Policy"} else "low"
             impact = "Client-side browser protections may be weaker than expected."
             remediation = web_header_remediation(header_name)
         elif finding_type == "cookie_flags":
             title = "Cookie Missing Recommended Security Flags"
             category = "cookies"
+            severity = "medium"
             impact = "Cookies may be exposed to cross-site access patterns or client-side script access."
             remediation = "Set Secure, HttpOnly, and SameSite on sensitive cookies where appropriate."
         elif finding_type == "risky_http_method":
             title = f"Risky HTTP Method Exposed: {detail}"
             category = "methods"
+            severity = "high" if str(detail).upper() in {"DELETE", "PUT", "CONNECT"} else "medium"
             impact = "Administrative or state-changing methods may be accessible unexpectedly."
             remediation = "Restrict unnecessary HTTP methods at the application and reverse-proxy layers."
         elif finding_type in {"cors_misconfiguration", "broad_cors_policy", "cors_null_origin", "broad_cors_exposed_headers"}:
             title = f"CORS Policy Issue: {str(detail)}"
             category = "cors"
+            severity = {
+                "cors_misconfiguration": "high",
+                "broad_cors_policy": "medium",
+                "cors_null_origin": "medium",
+                "broad_cors_exposed_headers": "low",
+            }.get(finding_type, severity)
             impact = "Cross-origin data access may be broader than intended."
             remediation = "Tighten allowed origins, credentials use, and exposed headers to documented client requirements."
         elif finding_type == "directory_listing":
             title = "Directory Listing Exposed"
             category = "content"
+            severity = "high"
             impact = "Unintended file and path disclosure can increase attacker reconnaissance value."
             remediation = "Disable directory indexing and restrict access to exposed file listings."
         elif finding_type == "debug_exposure":
             title = "Debug or Environment Information Exposed"
             category = "debug"
+            severity = "high"
             impact = "Debug output can disclose environment, path, and configuration details."
             remediation = "Disable debug pages and remove diagnostic endpoints from production exposure."
         elif finding_type == "error_leakage":
             title = "Application Error Details Exposed"
             category = "errors"
+            severity = "medium"
             impact = "Stack traces and backend errors may leak implementation details."
             remediation = "Use generic error handling for clients and log detailed traces only server-side."
         elif finding_type == "external_form_action":
             title = "HTML Form Posts to External Host"
             category = "forms"
+            severity = "medium"
             impact = "Sensitive user data may be submitted to a host outside the primary application boundary."
             remediation = "Review form handlers and keep sensitive form submissions on controlled origins."
         elif finding_type == "insecure_form_action":
             title = "HTML Form Downgrades to HTTP"
             category = "forms"
+            severity = "high"
             impact = "Sensitive data may be submitted without transport encryption."
             remediation = "Ensure all sensitive form actions submit to HTTPS-only endpoints."
         elif finding_type == "server_header_disclosure":
             title = "Server Header Disclosure"
             category = "fingerprinting"
+            severity = "info"
             impact = "Stack fingerprinting may be easier for unauthenticated users."
             remediation = "Reduce unnecessary server banner disclosure where operationally practical."
         elif finding_type == "powered_by_disclosure":
             title = "Technology Disclosure Header Present"
             category = "fingerprinting"
+            severity = "info"
             impact = "Technology stack disclosure can help attacker fingerprinting."
             remediation = "Remove unnecessary X-Powered-By style headers from production responses."
         elif finding_type == "exposed_sensitive_path":
             title = "Potentially Sensitive Path Exposed"
             category = "content"
+            severity = "high"
             impact = "Sensitive files or admin/debug paths may be reachable without intended controls."
             remediation = "Remove, restrict, or monitor access to sensitive files and administrative paths."
 
@@ -3052,7 +3067,14 @@ def normalize_recon_findings(asset: str, ports: list[dict[str, object]], source:
     for item in ports:
         port = int(item.get("port", 0))
         service = str(item.get("service") or "unknown")
-        severity = "high" if port in HIGH_RISK_LISTEN_PORTS else "medium" if port in SUSPICIOUS_PORTS else ""
+        if port in {23, 2323, 2375}:
+            severity = "critical"
+        elif port in HIGH_RISK_LISTEN_PORTS:
+            severity = "high"
+        elif port in SUSPICIOUS_PORTS:
+            severity = "medium"
+        else:
+            severity = ""
         if not severity:
             continue
         reason = SUSPICIOUS_PORTS.get(port) or "service exposure that usually needs explicit justification"
@@ -3081,7 +3103,7 @@ def build_client_report_markdown(title: str, asset: str, findings: list[Normaliz
         f"- Asset: {asset}",
         f"- Generated UTC: {datetime.now(timezone.utc).isoformat()}",
         f"- Total findings: {len(findings)}",
-        f"- Severity summary: high={counts.get('high', 0)}, medium={counts.get('medium', 0)}, low={counts.get('low', 0)}, info={counts.get('info', 0)}",
+        f"- Severity summary: critical={counts.get('critical', 0)}, high={counts.get('high', 0)}, medium={counts.get('medium', 0)}, low={counts.get('low', 0)}, info={counts.get('info', 0)}",
         "",
         "## Executive Summary",
     ]
@@ -3129,6 +3151,231 @@ def write_client_report_artifacts(
     report_path.write_text(build_client_report_markdown(title, asset, findings), encoding="utf-8")
     print(f"[+] Client report artifacts saved: {findings_path} and {report_path}")
     return {"findings": str(findings_path), "report": str(report_path)}
+
+
+def build_workflow_paths(name: str, client: str, target: str, output_dir: str | None) -> dict[str, Path]:
+    workspace = lab_init(name=name, client=client, target=target, output_dir=output_dir)
+    return {key: Path(value) for key, value in workspace["paths"].items()}
+
+
+def normalize_local_posture_findings(asset: str, checks: dict[str, object], source: str) -> list[NormalizedFinding]:
+    findings: list[NormalizedFinding] = []
+    sudo_check = checks.get("sudo_non_interactive", {})
+    if isinstance(sudo_check, dict) and sudo_check.get("returncode") == 0:
+        findings.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, "Passwordless sudo access available"),
+                title="Passwordless Sudo Access Available",
+                severity="high",
+                category="privilege",
+                asset=asset,
+                source=source,
+                evidence="sudo -n -l returned success",
+                impact="Passwordless administrative privilege can materially increase impact from compromise of the current account.",
+                remediation="Review sudoers scope, remove unnecessary NOPASSWD rules, and restrict administrative delegation.",
+            )
+        )
+
+    suid_paths = checks.get("suid_files", [])
+    if isinstance(suid_paths, list) and len(suid_paths) > 25:
+        findings.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, "Large SUID binary set present"),
+                title="Large SUID Binary Set Present",
+                severity="medium",
+                category="privilege",
+                asset=asset,
+                source=source,
+                evidence=f"{len(suid_paths)} SUID paths identified",
+                impact="A larger SUID surface increases the number of binaries that require hardening and review.",
+                remediation="Review SUID binaries against system baseline and remove unnecessary setuid permissions.",
+            )
+        )
+
+    writable_paths = checks.get("world_writable_paths", [])
+    risky_writable = []
+    if isinstance(writable_paths, list):
+        risky_writable = [
+            path
+            for path in writable_paths
+            if not str(path).startswith("/tmp") and not str(path).startswith("/var/tmp")
+        ]
+    if risky_writable:
+        findings.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, "World writable paths outside temp areas"),
+                title="World-Writable Paths Outside Temporary Areas",
+                severity="medium",
+                category="filesystem",
+                asset=asset,
+                source=source,
+                evidence=", ".join(risky_writable[:10]),
+                impact="Unexpected write access outside temporary directories can enable tampering or persistence opportunities.",
+                remediation="Restrict write permissions to intended owners and audit ACLs on non-temporary writable paths.",
+            )
+        )
+    return sorted(findings, key=finding_sort_key)
+
+
+def parse_vps_storage_findings(asset: str, stdout: str, source: str) -> list[NormalizedFinding]:
+    findings: list[NormalizedFinding] = []
+    for line in stdout.splitlines():
+        if "%" not in line:
+            continue
+        match = re.search(r"(\d+)%", line)
+        if not match:
+            continue
+        usage = int(match.group(1))
+        if usage < 85:
+            continue
+        severity = "high" if usage >= 95 else "medium"
+        findings.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, f"Filesystem usage {usage}%"),
+                title=f"Filesystem Usage Reached {usage}%",
+                severity=severity,
+                category="storage",
+                asset=asset,
+                source=source,
+                evidence=line.strip(),
+                impact="High disk or inode utilization can cause service disruption, logging failures, and deployment issues.",
+                remediation="Free space, rotate logs, expand storage, or adjust retention before usage reaches critical levels.",
+            )
+        )
+    return findings
+
+
+def parse_vps_service_findings(asset: str, stdout: str, source: str) -> list[NormalizedFinding]:
+    findings: list[NormalizedFinding] = []
+    for line in stdout.splitlines():
+        lower_line = line.lower()
+        if "active: failed" in lower_line:
+            findings.append(
+                NormalizedFinding(
+                    finding_id=finding_identifier(source, asset, f"Failed service {line.strip()}"),
+                    title="Service Failure Detected",
+                    severity="high",
+                    category="services",
+                    asset=asset,
+                    source=source,
+                    evidence=line.strip(),
+                    impact="Service failure can indicate degraded availability or broken platform dependencies.",
+                    remediation="Investigate the failed service state, logs, and recent changes before customer impact expands.",
+                )
+            )
+        elif "inactive (dead)" in lower_line:
+            findings.append(
+                NormalizedFinding(
+                    finding_id=finding_identifier(source, asset, f"Inactive service {line.strip()}"),
+                    title="Service Inactive",
+                    severity="medium",
+                    category="services",
+                    asset=asset,
+                    source=source,
+                    evidence=line.strip(),
+                    impact="Inactive services may indicate drift from the intended host role or failed service startup.",
+                    remediation="Confirm whether the service should be running and remediate if the inactive state is unintended.",
+                )
+            )
+    return findings
+
+
+def parse_vps_network_findings(asset: str, stdout: str, source: str) -> list[NormalizedFinding]:
+    findings: list[NormalizedFinding] = []
+    seen_ports: set[int] = set()
+    for line in stdout.splitlines():
+        if "listen" not in line.lower():
+            continue
+        port = parse_endpoint_port(line)
+        if not port or port in seen_ports:
+            continue
+        seen_ports.add(port)
+        if port not in HIGH_RISK_LISTEN_PORTS and port not in SUSPICIOUS_PORTS:
+            continue
+        severity = "high" if port in HIGH_RISK_LISTEN_PORTS else "medium"
+        findings.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, f"Listener {port}"),
+                title=f"Potentially Risky Listener Exposed on {port}/tcp",
+                severity=severity,
+                category="network",
+                asset=asset,
+                source=source,
+                evidence=line.strip(),
+                impact="High-value management or data services exposed on the host increase attack surface and hardening requirements.",
+                remediation="Restrict exposure by firewall, binding, or reverse proxy and verify that the service must be reachable.",
+            )
+        )
+    return findings
+
+
+def parse_vps_log_findings(asset: str, stdout: str, source: str) -> list[NormalizedFinding]:
+    findings: list[NormalizedFinding] = []
+    for line in stdout.splitlines():
+        matches = classify_log_line(line)
+        for match in matches:
+            title = f"Log Alert: {match['type']}"
+            severity = "high" if match["severity"] == "high" else "medium"
+            findings.append(
+                NormalizedFinding(
+                    finding_id=finding_identifier(source, asset, title + line[:40]),
+                    title=title,
+                    severity=severity,
+                    category="logs",
+                    asset=asset,
+                    source=source,
+                    evidence=line.strip(),
+                    impact="Warning or alert patterns in operational logs may indicate misuse, instability, or attempted abuse.",
+                    remediation="Review the full log context, source, and recurrence before deciding whether escalation is required.",
+                )
+            )
+    return findings
+
+
+def parse_vps_runtime_findings(asset: str, stdout: str, source: str, runtime: str) -> list[NormalizedFinding]:
+    findings: list[NormalizedFinding] = []
+    for line in stdout.splitlines():
+        lower_line = line.lower()
+        if "errored" in lower_line or "restarting" in lower_line or "stopped" in lower_line:
+            findings.append(
+                NormalizedFinding(
+                    finding_id=finding_identifier(source, asset, f"{runtime} runtime issue {line[:40]}"),
+                    title=f"{runtime.upper()} Runtime Issue Detected",
+                    severity="medium",
+                    category=runtime,
+                    asset=asset,
+                    source=source,
+                    evidence=line.strip(),
+                    impact="Application runtime instability can affect service availability and operator confidence in the deployment state.",
+                    remediation=f"Review {runtime} process state, restart history, and application logs to restore steady state.",
+                )
+            )
+    return findings
+
+
+def normalize_vps_findings(asset: str, results: list[dict[str, object]], source: str) -> list[NormalizedFinding]:
+    findings: list[NormalizedFinding] = []
+    for result in results:
+        if not isinstance(result, dict) or not result.get("executed"):
+            continue
+        stdout = str(result.get("stdout") or "")
+        label = str(result.get("label") or "").lower()
+        if label == "storage and inodes":
+            findings.extend(parse_vps_storage_findings(asset, stdout, source))
+        elif label == "service status":
+            findings.extend(parse_vps_service_findings(asset, stdout, source))
+        elif label == "network listeners":
+            findings.extend(parse_vps_network_findings(asset, stdout, source))
+        elif label == "recent logs":
+            findings.extend(parse_vps_log_findings(asset, stdout, source))
+        elif label == "pm2 processes":
+            findings.extend(parse_vps_runtime_findings(asset, stdout, source, "pm2"))
+        elif label == "docker status":
+            findings.extend(parse_vps_runtime_findings(asset, stdout, source, "docker"))
+    deduped: dict[str, NormalizedFinding] = {}
+    for finding in findings:
+        deduped[finding.finding_id] = finding
+    return sorted(deduped.values(), key=finding_sort_key)
 
 
 def build_recon_workflow_markdown(result: dict[str, object]) -> str:
@@ -5163,9 +5410,16 @@ def awareness_plan(company_name: str, audience: str) -> dict[str, object]:
     return plan
 
 
-def local_posture() -> dict[str, object]:
+def local_posture(output_dir: str | None = None) -> dict[str, object]:
     print("\n[+] Local privilege-risk posture review")
     print("[i] This is defensive inventory for your own Linux host; it does not attempt privilege escalation.")
+    hostname = socket.gethostname()
+    paths = build_workflow_paths(
+        name=f"local-posture-{hostname}",
+        client="Local Posture Review",
+        target=hostname,
+        output_dir=output_dir,
+    )
 
     checks: dict[str, object] = {}
     for name, command in {
@@ -5206,8 +5460,24 @@ def local_posture() -> dict[str, object]:
         print(f"  - {path}")
     if len(writable_paths) > 50:
         print(f"  ... {len(writable_paths) - 50} more")
-
-    return checks
+    findings = normalize_local_posture_findings(hostname, checks, "local-posture")
+    report_artifacts = write_client_report_artifacts(
+        paths,
+        "local-posture-report",
+        "Local Posture Report",
+        hostname,
+        findings,
+    )
+    write_json_output(paths["scans"] / "local-posture.json", checks)
+    summary = {
+        "host": hostname,
+        "checks": checks,
+        "findings": [asdict(item) for item in findings],
+        "report_artifacts": report_artifacts,
+        "workspace": str(paths["base"]),
+    }
+    write_json_output(paths["reports"] / "local-posture-workflow.json", summary)
+    return summary
 
 
 def vps_ssh_base(host: str, port: int, identity: str | None, batch_mode: bool = True) -> list[str]:
@@ -5515,6 +5785,7 @@ def vps_check(
     include_docker: bool,
     timeout: float,
     dry_run: bool,
+    output_dir: str | None = None,
     check_types: list[str] | None = None,
 ) -> dict[str, object]:
     if timeout < 3 or timeout > 600:
@@ -5535,6 +5806,13 @@ def vps_check(
     selected_paths = paths or ["/", "/var/www", "/home", "/root", "/etc/nginx/sites-enabled"]
     selected_services = services or ["nginx", "apache2", "pm2", "docker", "postgresql", "mysql", "redis-server"]
     target = host or "local host"
+    workspace_name = f"vps-{slugify_name(host or socket.gethostname())}"
+    workflow_paths = build_workflow_paths(
+        name=workspace_name,
+        client="VPS Health Review",
+        target=target,
+        output_dir=output_dir,
+    )
 
     print_vps_banner()
     print_section("VPS Health Check")
@@ -5646,7 +5924,15 @@ def vps_check(
         for check_type, label, script in scripts
         if check_type in selected_checks
     ]
-    return {
+    findings = normalize_vps_findings(target, results, "vps-check")
+    report_artifacts = write_client_report_artifacts(
+        workflow_paths,
+        "vps-client-report",
+        "VPS Health Client Report",
+        target,
+        findings,
+    )
+    payload = {
         "target": target,
         "mode": "ssh" if host else "local",
         "auth": "password prompt" if host and ssh_password else "key/agent or local",
@@ -5658,7 +5944,13 @@ def vps_check(
         "check_types": selected_checks,
         "dry_run": dry_run,
         "checks": results,
+        "findings": [asdict(item) for item in findings],
+        "report_artifacts": report_artifacts,
+        "workspace": str(workflow_paths["base"]),
     }
+    write_json_output(workflow_paths["scans"] / "vps-checks.json", results)
+    write_json_output(workflow_paths["reports"] / "vps-workflow.json", payload)
+    return payload
 
 
 def vps_console() -> None:
@@ -6330,13 +6622,6 @@ def build_parser() -> argparse.ArgumentParser:
     mobile_parser.add_argument("--all-iocs", action="store_true", help="Include up to 100 IOCs per type instead of 20.")
     mobile_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
-    live_parser = subparsers.add_parser("live-workflow", help="Run an authorized live DNS, port, and optional web baseline.")
-    add_common_run_options(live_parser)
-    live_parser.add_argument("target", help="Authorized host or IP target.")
-    live_parser.add_argument("--url", help="Optional URL for web baseline checks.")
-    live_parser.add_argument("--ports", default="common", help="Ports for TCP scan, for example common, 22,80,443, or 1-1024.")
-    live_parser.add_argument("--timeout", type=float, default=0.7, help="Socket timeout for port checks.")
-
     wireless_parser = subparsers.add_parser("wireless-info", help="Show read-only wireless/network interface information.")
     add_common_run_options(wireless_parser)
 
@@ -6351,6 +6636,7 @@ def build_parser() -> argparse.ArgumentParser:
     awareness_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
     posture_parser = subparsers.add_parser("local-posture", help="Run local defensive privilege-risk checks.")
+    posture_parser.add_argument("--output-dir", help="Workspace directory. Defaults to engagements/local-posture-<hostname>.")
     posture_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
     vps_parser = subparsers.add_parser(
@@ -6375,6 +6661,7 @@ def build_parser() -> argparse.ArgumentParser:
     vps_parser.add_argument("--timeout", type=float, default=30.0, help="Timeout per check in seconds.")
     vps_parser.add_argument("--ask-password", action="store_true", help="Prompt for an SSH password for remote checks.")
     vps_parser.add_argument("--dry-run", action="store_true", help="Print the local/SSH commands without running checks.")
+    vps_parser.add_argument("--output-dir", help="Workspace directory. Defaults to engagements/vps-<target>.")
     vps_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
     vps_ui_parser = subparsers.add_parser("vps-ui", aliases=["vps-menu"], help="Open the blue VPS control center.")
@@ -6406,6 +6693,7 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--timeout", type=float, default=30.0, help="Timeout per check in seconds.")
         subparser.add_argument("--ask-password", action="store_true", help="Prompt for an SSH password for remote checks.")
         subparser.add_argument("--dry-run", action="store_true", help="Print the local/SSH commands without running checks.")
+        subparser.add_argument("--output-dir", help="Workspace directory. Defaults to engagements/vps-<target>.")
         subparser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
     permission_parser = subparsers.add_parser("permission-guide", help="Show safe fixes for Operation not permitted errors.")
@@ -6587,7 +6875,8 @@ def interactive_menu() -> None:
                 audience = input("Audience [employees]: ").strip() or "employees"
                 awareness_plan(company, audience)
             elif choice == "24":
-                local_posture()
+                output_dir = input("Workspace directory [engagements/local-posture-<hostname>]: ").strip() or None
+                local_posture(output_dir=output_dir)
             elif choice == "25":
                 tool = input("Tool name [all]: ").strip() or None
                 print_install_hints(tool)
@@ -6616,11 +6905,6 @@ def interactive_menu() -> None:
             elif choice == "30":
                 values = shlex.split(input("IOC values: ").strip())
                 ioc_triage(values)
-            elif choice == "31":
-                target = input("Target host/IP: ").strip()
-                url = input("Optional URL [blank]: ").strip() or None
-                ports = input("Ports [common]: ").strip() or "common"
-                live_workflow(target=target, url=url, ports=ports, timeout=0.7)
             elif choice == "47":
                 target = input("Authorized host/IP: ").strip()
                 name = input("Engagement name [target]: ").strip() or None
@@ -6774,7 +7058,24 @@ def interactive_menu() -> None:
                     allow_non_lab_target=False,
                 )
             elif choice == "44":
-                vps_console()
+                host, ssh_port, identity = prompt_vps_connection()
+                ssh_password = prompt_vps_password() if host else None
+                output_dir = input("Workspace directory [engagements/vps-<target>]: ").strip() or None
+                vps_check(
+                    host=host,
+                    ssh_port=ssh_port,
+                    identity=identity,
+                    ssh_password=ssh_password,
+                    paths=None,
+                    services=None,
+                    include_pm2=True,
+                    include_logs=True,
+                    include_docker=False,
+                    timeout=30.0,
+                    dry_run=False,
+                    output_dir=output_dir,
+                    check_types=None,
+                )
             else:
                 print("Invalid choice. Use ? for help or q to exit.")
         except (ValueError, OSError, ConnectionError, TimeoutError) as error:
@@ -6899,7 +7200,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "awareness-plan":
             results = awareness_plan(args.company, args.audience)
         elif args.command == "local-posture":
-            results = local_posture()
+            results = local_posture(output_dir=args.output_dir)
         elif args.command in {"vps-check", "vps", "vps-health"}:
             ssh_password = prompt_vps_password() if args.host and args.ask_password else None
             results = vps_check(
@@ -6914,6 +7215,7 @@ def main(argv: list[str] | None = None) -> int:
                 include_docker=args.docker,
                 timeout=args.timeout,
                 dry_run=args.dry_run,
+                output_dir=args.output_dir,
                 check_types=args.only,
             )
         elif args.command in {"vps-ui", "vps-menu"}:
@@ -6950,6 +7252,7 @@ def main(argv: list[str] | None = None) -> int:
                 include_docker=args.command == "vps-docker",
                 timeout=args.timeout,
                 dry_run=args.dry_run,
+                output_dir=args.output_dir,
                 check_types=check_map[args.command],
             )
         elif args.command == "permission-guide":
@@ -7159,13 +7462,6 @@ def main(argv: list[str] | None = None) -> int:
                 install_missing=args.install_missing,
                 package_manager=args.package_manager,
             )
-        elif args.command == "live-workflow":
-            results = live_workflow(
-                target=args.target,
-                url=args.url,
-                ports=args.ports,
-                timeout=args.timeout,
-            )
         elif args.command == "wireless-info":
             results = wireless_info()
         elif args.command == "vuln-lookup":
@@ -7212,6 +7508,8 @@ def main(argv: list[str] | None = None) -> int:
             "ioc-triage",
             "mobile-artifact-audit",
             "apk-audit",
+            "wireless-info",
+            "vuln-lookup",
             "defang",
             "cve-lookup",
             "cve",

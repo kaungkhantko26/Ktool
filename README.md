@@ -169,6 +169,24 @@ ktool vps-check --only storage --only usage
 ktool vps-logs --host root@203.0.113.10 --dry-run
 ```
 
+### Local Posture
+
+`local-posture` now writes a workspace, normalized findings, and a client-ready report:
+
+```bash
+ktool local-posture
+ktool local-posture --output-dir engagements/local-posture-review
+```
+
+### VPS Reporting
+
+`vps-check` and the focused VPS subcommands now write a workspace, normalized findings, and a client-ready report:
+
+```bash
+ktool vps-check --host root@203.0.113.10
+ktool vps-check --host root@203.0.113.10 --output-dir engagements/vps-review
+```
+
 ### Utilities
 
 ```bash
@@ -194,6 +212,7 @@ Report behavior:
 - sensitive outputs such as generated passwords are written with mode `0600`
 - `target-brief`, `recon-workflow`, and `web-workflow` also write normalized findings under `findings/`
 - workflow runs also generate client-ready Markdown reports under `reports/`
+- `local-posture` and `vps-check` now follow the same workspace/reporting pattern
 
 ## External Tool Wrappers
 
