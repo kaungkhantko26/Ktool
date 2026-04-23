@@ -19,7 +19,9 @@ import json
 import math
 import os
 import platform
+import pty
 import re
+import select
 import secrets
 import shlex
 import shutil
@@ -4278,14 +4280,111 @@ def local_posture() -> dict[str, object]:
     return checks
 
 
-def vps_ssh_base(host: str, port: int, identity: str | None) -> list[str]:
+def vps_ssh_base(host: str, port: int, identity: str | None, batch_mode: bool = True) -> list[str]:
     if port < 1 or port > 65535:
         raise ValueError("--ssh-port must be between 1 and 65535.")
-    command = ["ssh", "-p", str(port), "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+    command = ["ssh", "-p", str(port), "-o", "ConnectTimeout=10"]
+    command.extend(["-o", "BatchMode=yes" if batch_mode else "BatchMode=no"])
     if identity:
         command.extend(["-i", str(Path(identity).expanduser())])
     command.append(host)
     return command
+
+
+def parse_vps_ssh_input(value: str) -> tuple[str | None, int | None, str | None]:
+    """Accept either root@host or a small ssh command like: ssh -p 2222 -i key root@host."""
+    text = value.strip()
+    if not text:
+        return None, None, None
+    parts = shlex.split(text)
+    if parts and parts[0] == "ssh":
+        parts = parts[1:]
+
+    host: str | None = None
+    port: int | None = None
+    identity: str | None = None
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        if part == "-p" and index + 1 < len(parts):
+            port = int(parts[index + 1])
+            index += 2
+            continue
+        if part.startswith("-p") and len(part) > 2:
+            port = int(part[2:])
+            index += 1
+            continue
+        if part == "-i" and index + 1 < len(parts):
+            identity = parts[index + 1]
+            index += 2
+            continue
+        if part.startswith("-i") and len(part) > 2:
+            identity = part[2:]
+            index += 1
+            continue
+        if part == "-o" and index + 1 < len(parts):
+            index += 2
+            continue
+        if part.startswith("-"):
+            index += 1
+            continue
+        host = part
+        index += 1
+
+    return host, port, identity
+
+
+def prompt_vps_password() -> str | None:
+    password = getpass.getpass("SSH login password [blank = let ssh ask]: ")
+    return password or None
+
+
+def run_interactive_ssh(command: list[str], password: str | None = None) -> int:
+    if not password:
+        return subprocess.run(command, check=False).returncode
+
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execvp(command[0], command)
+
+    password_sent = False
+    prompt_buffer = ""
+    stdin_fd = sys.stdin.fileno() if sys.stdin.isatty() else None
+    try:
+        while True:
+            read_fds = [fd]
+            if stdin_fd is not None:
+                read_fds.append(stdin_fd)
+            ready, _, _ = select.select(read_fds, [], [])
+
+            if fd in ready:
+                try:
+                    data = os.read(fd, 1024)
+                except OSError:
+                    break
+                if not data:
+                    break
+                sys.stdout.buffer.write(data)
+                sys.stdout.buffer.flush()
+                prompt_buffer = (prompt_buffer + data.decode(errors="ignore"))[-500:].lower()
+                if not password_sent and "password:" in prompt_buffer:
+                    os.write(fd, (password + "\n").encode())
+                    password_sent = True
+                    prompt_buffer = ""
+
+            if stdin_fd is not None and stdin_fd in ready:
+                data = os.read(stdin_fd, 1024)
+                if not data:
+                    break
+                os.write(fd, data)
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+    _, status = os.waitpid(pid, 0)
+    return os.waitstatus_to_exitcode(status)
 
 
 def run_vps_script(
@@ -4348,7 +4447,7 @@ def print_vps_banner() -> None:
 
 def print_vps_menu() -> None:
     items = [
-        ("1", "VPS Login Command"),
+        ("1", "VPS Login (SSH)"),
         ("2", "VPS Full Checker"),
         ("3", "VPS Storage Checker"),
         ("4", "VPS Usage Checker"),
@@ -4367,18 +4466,36 @@ def print_vps_menu() -> None:
     print(color(border, "1;34"))
 
 
-def prompt_vps_connection() -> tuple[str | None, int, str | None]:
-    host = input("VPS SSH host [blank for local checks]: ").strip() or None
-    ssh_port = int(input("SSH port [22]: ").strip() or "22")
-    identity = input("SSH identity file [optional]: ").strip() or None
+def prompt_vps_connection(require_host: bool = False) -> tuple[str | None, int, str | None]:
+    prompt = "VPS SSH target (example root@150.95.26.242 or ssh root@150.95.26.242)"
+    if require_host:
+        prompt += ": "
+    else:
+        prompt += " [blank for local checks]: "
+    host, parsed_port, parsed_identity = parse_vps_ssh_input(input(prompt).strip())
+    if require_host and not host:
+        raise ValueError("VPS login needs an SSH target, for example root@150.95.26.242.")
+    if not host:
+        return None, 22, None
+
+    default_port = parsed_port or 22
+    ssh_port = int(input(f"SSH port [{default_port}]: ").strip() or str(default_port))
+    identity_default = parsed_identity or ""
+    identity = input(f"SSH identity file [{identity_default or 'optional'}]: ").strip() or identity_default or None
     return host, ssh_port, identity
 
 
-def vps_login_command(host: str, ssh_port: int, identity: str | None, connect: bool = False) -> dict[str, object]:
+def vps_login_command(
+    host: str,
+    ssh_port: int,
+    identity: str | None,
+    connect: bool = False,
+    ask_password: bool = False,
+) -> dict[str, object]:
     if not host:
         raise ValueError("VPS login needs --host, for example root@203.0.113.10.")
     ssh_path = find_tool("ssh") or "ssh"
-    command = vps_ssh_base(host, ssh_port, identity)
+    command = vps_ssh_base(host, ssh_port, identity, batch_mode=False)
     command[0] = ssh_path
 
     print_vps_banner()
@@ -4389,9 +4506,10 @@ def vps_login_command(host: str, ssh_port: int, identity: str | None, connect: b
         print("[i] Login command preview only. Add --connect to open an interactive SSH session.")
         return {"host": host, "command": command, "connected": False}
 
+    password = prompt_vps_password() if ask_password else None
     print("[i] Opening interactive SSH session. Exit SSH to return to your shell.")
-    result = subprocess.run(command, check=False)
-    return {"host": host, "command": command, "connected": True, "returncode": result.returncode}
+    returncode = run_interactive_ssh(command, password=password)
+    return {"host": host, "command": command, "connected": True, "returncode": returncode}
 
 
 def vps_check(
@@ -4557,8 +4675,8 @@ def vps_console() -> None:
         try:
             if choice == "1":
                 if not host:
-                    host, ssh_port, identity = prompt_vps_connection()
-                vps_login_command(host, ssh_port, identity, connect=False)
+                    host, ssh_port, identity = prompt_vps_connection(require_host=True)
+                vps_login_command(host, ssh_port, identity, connect=True, ask_password=True)
             elif choice == "2":
                 vps_check(host, ssh_port, identity, None, None, True, include_logs=False, include_docker=False, timeout=30.0, dry_run=False)
             elif choice == "3":
@@ -5169,6 +5287,7 @@ def build_parser() -> argparse.ArgumentParser:
     vps_login_parser.add_argument("--ssh-port", type=int, default=22, help="SSH port.")
     vps_login_parser.add_argument("--identity", help="SSH private key path.")
     vps_login_parser.add_argument("--connect", action="store_true", help="Open the SSH session instead of previewing the command.")
+    vps_login_parser.add_argument("--ask-password", action="store_true", help="Prompt for the SSH login password before connecting.")
     vps_login_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
     for command_name, help_text in {
@@ -5609,6 +5728,7 @@ def main(argv: list[str] | None = None) -> int:
                 ssh_port=args.ssh_port,
                 identity=args.identity,
                 connect=args.connect,
+                ask_password=args.ask_password,
             )
         elif args.command in {"vps-storage", "vps-usage", "vps-pm2", "vps-ls", "vps-services", "vps-logs", "vps-docker"}:
             check_map = {
