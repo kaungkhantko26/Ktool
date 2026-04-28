@@ -361,6 +361,24 @@ def print_key_value_table(rows: list[tuple[str, str]]) -> None:
         print(f"  {color(key.ljust(width), '36')} : {value}")
 
 
+def print_table(headers: list[str], rows: list[list[str]]) -> None:
+    if not rows:
+        print("[i] No rows to show.")
+        return
+    widths = [
+        max(len(headers[index]), *(len(row[index]) for row in rows))
+        for index in range(len(headers))
+    ]
+    separator = "+-" + "-+-".join("-" * width for width in widths) + "-+"
+    header_line = "| " + " | ".join(headers[index].ljust(widths[index]) for index in range(len(headers))) + " |"
+    print(separator)
+    print(header_line)
+    print(separator)
+    for row in rows:
+        print("| " + " | ".join(row[index].ljust(widths[index]) for index in range(len(headers))) + " |")
+    print(separator)
+
+
 def print_exit_screen(reason: str = "Session closed", exit_code: int = 0) -> None:
     title = f"{MYANMAR_FLAG} {TOOL_NAME} Console"
     lines = [
@@ -676,6 +694,123 @@ EXTERNAL_WRAPPER_TOOLS = {
     "web-scan": ["nuclei", "nikto"],
     "js-audit": ["retire", "semgrep", "trufflehog"],
 }
+
+RECOON_TOOLS = [
+    {
+        "kind": "workflow",
+        "name": "Target brief",
+        "command": "target-brief",
+        "purpose": "DNS, WHOIS, ports, and first web hints in one workspace.",
+    },
+    {
+        "kind": "workflow",
+        "name": "Recon workflow",
+        "command": "recon-workflow",
+        "purpose": "Saved DNS, WHOIS, subdomain, port, and nmap artifacts.",
+    },
+    {
+        "kind": "dns",
+        "name": "DNS lookup",
+        "command": "dns",
+        "purpose": "Resolve addresses and basic DNS records.",
+    },
+    {
+        "kind": "dns",
+        "name": "WHOIS lookup",
+        "command": "whois",
+        "purpose": "Review registration and ownership records.",
+    },
+    {
+        "kind": "dns",
+        "name": "Subdomain resolver",
+        "command": "subs",
+        "purpose": "Resolve common subdomains from a wordlist.",
+    },
+    {
+        "kind": "dns",
+        "name": "External DNS enum",
+        "command": "dns-enum",
+        "purpose": "Run installed dnsrecon, subfinder, or amass.",
+    },
+    {
+        "kind": "network",
+        "name": "TCP port scan",
+        "command": "ports",
+        "purpose": "Fast Python TCP reachability check.",
+    },
+    {
+        "kind": "network",
+        "name": "Nmap service scan",
+        "command": "nmap",
+        "purpose": "Conservative service detection when nmap is installed.",
+    },
+    {
+        "kind": "web",
+        "name": "HTTP headers",
+        "command": "headers",
+        "purpose": "Check security headers and response metadata.",
+    },
+    {
+        "kind": "web",
+        "name": "Common paths",
+        "command": "dirs",
+        "purpose": "Check common web paths with low request volume.",
+    },
+    {
+        "kind": "web",
+        "name": "Web baseline",
+        "command": "web",
+        "purpose": "Headers, cookies, methods, CORS, and exposure hints.",
+    },
+    {
+        "kind": "web",
+        "name": "Content discovery",
+        "command": "content-discovery",
+        "purpose": "Run gobuster, ffuf, or dirb against authorized targets.",
+    },
+    {
+        "kind": "web",
+        "name": "Fingerprint",
+        "command": "fingerprint",
+        "purpose": "Run whatweb, wafw00f, or httpx when installed.",
+    },
+    {
+        "kind": "cve",
+        "name": "NVD CVE lookup",
+        "command": "cve-lookup",
+        "purpose": "Search CVE records by ID or product keyword.",
+    },
+    {
+        "kind": "cve",
+        "name": "Exploit-DB metadata",
+        "command": "vuln-lookup",
+        "purpose": "Search local searchsploit metadata.",
+    },
+    {
+        "kind": "intel",
+        "name": "Passive OSINT",
+        "command": "osint",
+        "purpose": "RDAP, crt.sh, optional Shodan and VirusTotal enrichment.",
+    },
+    {
+        "kind": "intel",
+        "name": "IP intelligence",
+        "command": "ip-intel",
+        "purpose": "Ownership, reverse DNS, geo, and optional reputation data.",
+    },
+    {
+        "kind": "intel",
+        "name": "Shodan host lookup",
+        "command": "shodan",
+        "purpose": "Passive internet exposure lookup with an API key.",
+    },
+    {
+        "kind": "intel",
+        "name": "VirusTotal lookup",
+        "command": "virustotal",
+        "purpose": "IOC reputation lookup with an API key.",
+    },
+]
 
 WORKFLOW_REQUIREMENTS = {
     "target-brief": {
@@ -7356,6 +7491,34 @@ def check_tools(categories: list[str] | None = None) -> dict[str, list[dict[str,
     return report
 
 
+def recoon_tools(kind: str | None = None, command_only: bool = False) -> dict[str, object]:
+    selected = [
+        item
+        for item in RECOON_TOOLS
+        if kind is None or str(item["kind"]).lower() == kind.lower()
+    ]
+    print_section("Recoon Tools")
+    rows = [
+        [
+            str(item["kind"]),
+            str(item["name"]),
+            str(item["command"]),
+            str(item["purpose"]),
+        ]
+        for item in selected
+    ]
+    headers = ["Kind", "Name", "Command", "Purpose"]
+    if command_only:
+        rows = [[row[0], row[1], row[2]] for row in rows]
+        headers = ["Kind", "Name", "Command"]
+    print_table(headers, rows)
+    return {
+        "kind": kind or "all",
+        "count": len(selected),
+        "tools": selected,
+    }
+
+
 def workflow_item_installed(name: str) -> bool:
     if name in PYTHON_PACKAGES:
         return importlib.util.find_spec(name) is not None
@@ -7574,6 +7737,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Limit checks to one category. Can be used more than once.",
     )
     tools_parser.add_argument(
+        "--report",
+        default=argparse.SUPPRESS,
+        help="Write JSON report to this path.",
+    )
+
+    recoon_parser = subparsers.add_parser(
+        "recoon",
+        aliases=["recon"],
+        help="Show practical recon tools grouped by kind, with CVE tools separated.",
+    )
+    recoon_parser.add_argument(
+        "--kind",
+        choices=sorted({str(item["kind"]) for item in RECOON_TOOLS}),
+        help="Only show one tool kind.",
+    )
+    recoon_parser.add_argument(
+        "--commands-only",
+        action="store_true",
+        help="Show only kind, name, and command.",
+    )
+    recoon_parser.add_argument(
         "--report",
         default=argparse.SUPPRESS,
         help="Write JSON report to this path.",
@@ -8573,6 +8757,8 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "tools":
             results = check_tools(args.category)
+        elif args.command in {"recoon", "recon"}:
+            results = recoon_tools(args.kind, command_only=args.commands_only)
         elif args.command in {"workflow-ready", "ready"}:
             results = workflow_readiness(args.workflow)
         elif args.command == "doctor":
@@ -8986,6 +9172,8 @@ def main(argv: list[str] | None = None) -> int:
             results = vuln_lookup(args.query, timeout=args.timeout)
         elif args.command in {
             "tools",
+            "recoon",
+            "recon",
             "workflow-ready",
             "ready",
             "doctor",

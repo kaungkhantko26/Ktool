@@ -133,6 +133,16 @@ ktool web-workflow https://example.com --fingerprint --tls-audit --js-audit --ye
 
 ## Common Commands
 
+### Recoon Tool Index
+
+Use `recoon` when you want a quick table of practical recon commands grouped by kind. CVE research is separated from DNS, web, network, workflow, and passive intel commands.
+
+```bash
+ktool recoon
+ktool recoon --kind cve
+ktool recoon --kind web --commands-only
+```
+
 ### Recon
 
 ```bash
