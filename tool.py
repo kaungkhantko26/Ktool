@@ -142,6 +142,10 @@ TERMINAL_WIDTH = 78
 SHODAN_API_KEY_ENV = "SHODAN_API_KEY"
 NVD_API_KEY_ENV = "NVD_API_KEY"
 VIRUSTOTAL_API_KEY_ENV = "VIRUSTOTAL_API_KEY"
+OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+DEFAULT_OPENROUTER_MODEL = "openai/gpt-4.1-mini"
+AI_SECURITY_MODES = ("network", "local", "log", "workspace", "ioc", "live", "web")
 HTTP_RETRY_ATTEMPTS = 2
 
 PACKAGE_NAMES = {
@@ -461,6 +465,8 @@ def print_menu_panel() -> None:
                 ("8", "Common Path Probe"),
                 ("9", "Safe Web Baseline"),
                 ("27", "Web Risk Baseline"),
+                ("51", "AI Web Audit"),
+                ("52", "AI Security Audit"),
                 ("41", "Content Discovery: Gobuster / FFUF / Dirb"),
             ],
         ),
@@ -534,15 +540,15 @@ TOOL_CATEGORIES = {
     },
     "scan": {
         "title": "Scanning and Enumeration",
-        "skills": ["TCP scanning", "Service detection", "Basic web exposure checks"],
+        "skills": ["TCP scanning", "Service detection", "Basic web exposure checks", "AI-assisted prioritization"],
         "tools": ["nmap", "nikto", "nc"],
-        "implemented": ["ports", "nmap", "content-discovery"],
+        "implemented": ["ports", "nmap", "content-discovery", "ai-security-audit"],
     },
     "web": {
         "title": "Web Application Testing",
-        "skills": ["Security headers", "Common path discovery", "Fingerprinting", "TLS review", "JavaScript audit"],
+        "skills": ["Security headers", "Common path discovery", "Fingerprinting", "TLS review", "JavaScript audit", "AI-assisted review"],
         "tools": ["gobuster", "ffuf", "dirb", "seclists", "whatweb", "wafw00f", "nikto", "searchsploit", "httpx", "sslscan", "testssl.sh", "nuclei"],
-        "implemented": ["headers", "dirs", "web", "web-vuln-search", "content-discovery", "fingerprint", "tls-audit", "web-scan", "js-audit", "web-workflow"],
+        "implemented": ["headers", "dirs", "web", "web-vuln-search", "ai-web-audit", "content-discovery", "fingerprint", "tls-audit", "web-scan", "js-audit", "web-workflow"],
     },
     "threat": {
         "title": "Threat Site Investigation",
@@ -564,7 +570,7 @@ TOOL_CATEGORIES = {
     },
     "network": {
         "title": "Network Security Testing",
-        "skills": ["TCP/IP", "Ports", "Firewalls", "VPNs", "Packet capture", "LAN inventory"],
+        "skills": ["TCP/IP", "Ports", "Firewalls", "VPNs", "Packet capture", "LAN inventory", "AI network monitoring review"],
         "tools": ["lsof", "tcpdump", "scapy", "ncat", "nc"],
         "implemented": [
             "capture",
@@ -577,6 +583,7 @@ TOOL_CATEGORIES = {
             "sudo-su",
             "permission-guide",
             "tools",
+            "ai-security-audit",
         ],
     },
     "wireless": {
@@ -764,6 +771,18 @@ RECOON_TOOLS = [
     },
     {
         "kind": "web",
+        "name": "AI web audit",
+        "command": "ai-web-audit",
+        "purpose": "Use OpenRouter to prioritize safe baseline web evidence into likely findings.",
+    },
+    {
+        "kind": "workflow",
+        "name": "AI security audit",
+        "command": "ai-security-audit",
+        "purpose": "Use OpenRouter to prioritize network, local, log, IOC, workspace, live, or web evidence.",
+    },
+    {
+        "kind": "web",
         "name": "Content discovery",
         "command": "content-discovery",
         "purpose": "Run gobuster, ffuf, or dirb against authorized targets.",
@@ -842,6 +861,28 @@ WORKFLOW_REQUIREMENTS = {
         "required_data": [],
         "recommended_data": ["directory-small"],
         "required_env": [],
+        "recommended_env": [],
+        "required_python": [],
+        "recommended_python": [],
+    },
+    "ai-web-audit": {
+        "title": "AI Web Audit",
+        "required_tools": [],
+        "recommended_tools": ["searchsploit"],
+        "required_data": [],
+        "recommended_data": [],
+        "required_env": [OPENROUTER_API_KEY_ENV],
+        "recommended_env": [],
+        "required_python": [],
+        "recommended_python": [],
+    },
+    "ai-security-audit": {
+        "title": "AI Security Audit",
+        "required_tools": [],
+        "recommended_tools": ["lsof"],
+        "required_data": [],
+        "recommended_data": [],
+        "required_env": [OPENROUTER_API_KEY_ENV],
         "recommended_env": [],
         "required_python": [],
         "recommended_python": [],
@@ -1477,6 +1518,48 @@ def http_json_request(
     if not isinstance(data, dict):
         raise ConnectionError("API response was not a JSON object.")
     return data
+
+
+def http_json_post_request(
+    url: str,
+    payload: dict[str, object],
+    timeout: float,
+    headers: dict[str, str] | None = None,
+) -> dict[str, object]:
+    request_headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    if headers:
+        request_headers.update(headers)
+    body = json.dumps(payload).encode("utf-8")
+    request = Request(url, data=body, method="POST", headers=request_headers)
+    for attempt in range(HTTP_RETRY_ATTEMPTS):
+        try:
+            with urlopen(request, timeout=timeout, context=ssl.create_default_context()) as response:
+                response_body = response.read(1024 * 1024)
+                return json.loads(response_body.decode("utf-8", errors="replace"))
+        except HTTPError as error:
+            response_body = error.read(64 * 1024).decode("utf-8", errors="replace")
+            message = response_body
+            try:
+                parsed = json.loads(response_body)
+                if isinstance(parsed, dict):
+                    detail = parsed.get("error")
+                    message = str(detail.get("message") if isinstance(detail, dict) else detail or parsed)
+            except json.JSONDecodeError:
+                pass
+            raise ConnectionError(f"HTTP {error.code}: {message}") from error
+        except URLError as error:
+            if attempt + 1 < HTTP_RETRY_ATTEMPTS and should_retry_url_error(error):
+                time.sleep(0.25 * (attempt + 1))
+                continue
+            reason = getattr(error, "reason", error)
+            raise ConnectionError(str(reason)) from error
+        except json.JSONDecodeError as error:
+            raise ConnectionError(f"API response was not valid JSON: {error}") from error
+    raise ConnectionError(f"API request failed for {url}")
 
 
 def first_public_ip(target: str) -> tuple[str, str | None]:
@@ -2333,6 +2416,611 @@ def web_vulnerability_search(
         "searchsploit": exploitdb_results,
         "nikto": nikto_result,
     }
+
+
+def compact_web_evidence(scan_result: dict[str, object]) -> dict[str, object]:
+    headers = scan_result.get("headers", {}) if isinstance(scan_result.get("headers"), dict) else {}
+    selected_headers = {
+        key: value
+        for key, value in headers.items()
+        if key.lower()
+        in {
+            "server",
+            "x-powered-by",
+            "x-generator",
+            "set-cookie",
+            "access-control-allow-origin",
+            "access-control-allow-credentials",
+            "access-control-expose-headers",
+        }
+    }
+    return {
+        "url": scan_result.get("url"),
+        "status": scan_result.get("status"),
+        "selected_headers": selected_headers,
+        "technologies": scan_result.get("technologies", []),
+        "missing_security_headers": scan_result.get("missing_security_headers", []),
+        "cookie_issues": scan_result.get("cookie_issues", []),
+        "http_methods": scan_result.get("http_methods", {}),
+        "cors_issues": scan_result.get("cors_issues", []),
+        "html_summary": scan_result.get("html_summary", {}),
+        "exposed_paths": scan_result.get("exposed_paths", []),
+        "findings": scan_result.get("findings", []),
+        "searchsploit_queries": [
+            item.get("query")
+            for item in scan_result.get("searchsploit", [])
+            if isinstance(item, dict) and item.get("query")
+        ][:10],
+    }
+
+
+def extract_json_object(text: str) -> dict[str, object] | None:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.I)
+        stripped = re.sub(r"\s*```$", "", stripped)
+    try:
+        parsed = json.loads(stripped)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        parsed = json.loads(stripped[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def openrouter_web_vulnerability_analysis(
+    scan_result: dict[str, object],
+    api_key: str | None,
+    model: str,
+    timeout: float,
+) -> dict[str, object]:
+    key = api_key_value(api_key, OPENROUTER_API_KEY_ENV, "OpenRouter")
+    evidence = compact_web_evidence(scan_result)
+    system_prompt = (
+        "You are a defensive web application security analyst. Analyze only the supplied evidence from an authorized scan. "
+        "Do not provide exploit payloads, bypass instructions, credential attacks, persistence, phishing, or destructive steps. "
+        "Return strict JSON only."
+    )
+    user_prompt = {
+        "task": "Prioritize likely web vulnerabilities or misconfigurations from this safe baseline evidence.",
+        "output_schema": {
+            "risk_score": "integer 0-100",
+            "summary": "short operator-facing summary",
+            "findings": [
+                {
+                    "severity": "critical|high|medium|low|info",
+                    "title": "finding title",
+                    "evidence": "specific evidence from input",
+                    "impact": "business/security impact",
+                    "remediation": "defensive remediation",
+                    "validation_steps": ["safe manual checks only, no exploit payloads"],
+                    "confidence": "high|medium|low",
+                }
+            ],
+            "next_steps": ["safe authorized follow-up actions"],
+        },
+        "evidence": evidence,
+    }
+    payload = {
+        "model": model,
+        "temperature": 0.1,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_prompt, indent=2)},
+        ],
+    }
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "HTTP-Referer": "https://localhost/ktool-fieldops",
+        "X-Title": TOOL_NAME,
+    }
+    print(f"\n[+] OpenRouter AI web analysis with model {model}")
+    response = http_json_post_request(OPENROUTER_API_URL, payload=payload, timeout=timeout, headers=headers)
+    choices = response.get("choices", [])
+    content = ""
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        if isinstance(first, dict):
+            message = first.get("message", {})
+            if isinstance(message, dict):
+                content = str(message.get("content") or "")
+    parsed = extract_json_object(content)
+    analysis: dict[str, object] = {
+        "enabled": True,
+        "provider": "openrouter",
+        "model": model,
+        "raw_response": content,
+        "analysis": parsed if parsed is not None else None,
+    }
+    if parsed:
+        print(f"[AI] Risk score: {parsed.get('risk_score', 'n/a')}")
+        summary = str(parsed.get("summary") or "").strip()
+        if summary:
+            print(f"[AI] {summary}")
+        findings = parsed.get("findings", [])
+        if isinstance(findings, list) and findings:
+            print("\n[AI findings]")
+            for finding in findings[:10]:
+                if isinstance(finding, dict):
+                    print(f"[{str(finding.get('severity', 'info')).upper()}] {finding.get('title', 'Untitled finding')}")
+        elif isinstance(findings, list):
+            print("[AI] No additional likely findings were returned.")
+    else:
+        print("[i] OpenRouter returned text that could not be parsed as strict JSON; raw response saved in report.")
+    return analysis
+
+
+def compact_for_ai(value: object, depth: int = 0) -> object:
+    if depth > 4:
+        return str(value)[:500]
+    if isinstance(value, dict):
+        compacted: dict[str, object] = {}
+        for key, item in value.items():
+            lowered = str(key).lower()
+            if lowered in {"raw_response", "body", "password", "api_key", "authorization"}:
+                continue
+            compacted[str(key)] = compact_for_ai(item, depth + 1)
+        return compacted
+    if isinstance(value, list):
+        return [compact_for_ai(item, depth + 1) for item in value[:80]]
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")[:1000]
+    if isinstance(value, str):
+        return value[:2000]
+    return value
+
+
+def openrouter_security_analysis(
+    mode: str,
+    evidence: dict[str, object],
+    api_key: str | None,
+    model: str,
+    timeout: float,
+) -> dict[str, object]:
+    key = api_key_value(api_key, OPENROUTER_API_KEY_ENV, "OpenRouter")
+    compact_evidence = compact_for_ai(evidence)
+    system_prompt = (
+        "You are a defensive red-team and blue-team security analyst working only from authorized evidence. "
+        "Prioritize risk, explain likely attack paths at a high level, and give defensive validation and remediation. "
+        "Do not provide exploit code, weaponized payloads, credential attacks, phishing content, persistence, evasion, or destructive steps. "
+        "Return strict JSON only."
+    )
+    user_prompt = {
+        "mode": mode,
+        "task": "Analyze this authorized security evidence and produce a practical pentest-style defensive action plan.",
+        "output_schema": {
+            "risk_score": "integer 0-100",
+            "executive_summary": "short summary",
+            "attack_surface": ["observable assets, services, behaviors, or controls"],
+            "likely_attack_paths": [
+                {
+                    "name": "high-level path name",
+                    "preconditions": ["observed preconditions only"],
+                    "risk": "critical|high|medium|low|info",
+                    "defensive_validation": ["safe validation steps only"],
+                }
+            ],
+            "findings": [
+                {
+                    "severity": "critical|high|medium|low|info",
+                    "title": "finding title",
+                    "evidence": "specific evidence from input",
+                    "impact": "business/security impact",
+                    "remediation": "defensive remediation",
+                    "confidence": "high|medium|low",
+                }
+            ],
+            "monitoring_rules": ["safe detection ideas, log patterns, or review checks"],
+            "next_steps": ["safe authorized follow-up actions"],
+        },
+        "evidence": compact_evidence,
+    }
+    payload = {
+        "model": model,
+        "temperature": 0.1,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_prompt, indent=2)},
+        ],
+    }
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "HTTP-Referer": "https://localhost/ktool-fieldops",
+        "X-Title": TOOL_NAME,
+    }
+    print(f"\n[+] OpenRouter AI security analysis ({mode}) with model {model}")
+    response = http_json_post_request(OPENROUTER_API_URL, payload=payload, timeout=timeout, headers=headers)
+    choices = response.get("choices", [])
+    content = ""
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        if isinstance(first, dict):
+            message = first.get("message", {})
+            if isinstance(message, dict):
+                content = str(message.get("content") or "")
+    parsed = extract_json_object(content)
+    result: dict[str, object] = {
+        "enabled": True,
+        "provider": "openrouter",
+        "mode": mode,
+        "model": model,
+        "raw_response": content,
+        "analysis": parsed if parsed is not None else None,
+    }
+    if parsed:
+        print(f"[AI] Risk score: {parsed.get('risk_score', 'n/a')}")
+        summary = str(parsed.get("executive_summary") or parsed.get("summary") or "").strip()
+        if summary:
+            print(f"[AI] {summary}")
+        findings = parsed.get("findings", [])
+        if isinstance(findings, list) and findings:
+            print("\n[AI prioritized findings]")
+            for finding in findings[:10]:
+                if isinstance(finding, dict):
+                    print(f"[{str(finding.get('severity', 'info')).upper()}] {finding.get('title', 'Untitled finding')}")
+        paths = parsed.get("likely_attack_paths", [])
+        if isinstance(paths, list) and paths:
+            print("\n[AI high-level attack paths]")
+            for path in paths[:6]:
+                if isinstance(path, dict):
+                    print(f"[{str(path.get('risk', 'info')).upper()}] {path.get('name', 'Unnamed path')}")
+    else:
+        print("[i] OpenRouter returned text that could not be parsed as strict JSON; raw response saved in report.")
+    return result
+
+
+def normalize_ai_web_findings(asset: str, ai_result: dict[str, object], source: str) -> list[NormalizedFinding]:
+    analysis = ai_result.get("analysis") if isinstance(ai_result, dict) else None
+    if not isinstance(analysis, dict):
+        return []
+    findings = analysis.get("findings", [])
+    if not isinstance(findings, list):
+        return []
+    normalized: list[NormalizedFinding] = []
+    for item in findings:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "AI Web Audit Finding")
+        severity = str(item.get("severity") or "info").lower()
+        if severity not in {"critical", "high", "medium", "low", "info"}:
+            severity = "info"
+        evidence = str(item.get("evidence") or "")
+        impact = str(item.get("impact") or "AI-assisted review identified a web risk that needs operator validation.")
+        remediation = str(item.get("remediation") or "Validate the issue manually and apply the appropriate defensive fix.")
+        validation_steps = item.get("validation_steps", [])
+        if isinstance(validation_steps, list) and validation_steps:
+            evidence = f"{evidence} | validation: {'; '.join(str(step) for step in validation_steps[:5])}"
+        normalized.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, title),
+                title=title,
+                severity=severity,
+                category="ai-web-review",
+                asset=asset,
+                source=source,
+                evidence=evidence,
+                impact=impact,
+                remediation=remediation,
+            )
+        )
+    return sorted(normalized, key=finding_sort_key)
+
+
+def normalize_ai_security_findings(asset: str, ai_result: dict[str, object], source: str) -> list[NormalizedFinding]:
+    analysis = ai_result.get("analysis") if isinstance(ai_result, dict) else None
+    if not isinstance(analysis, dict):
+        return []
+    findings = analysis.get("findings", [])
+    if not isinstance(findings, list):
+        return []
+    normalized: list[NormalizedFinding] = []
+    for item in findings:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "AI Security Finding")
+        severity = str(item.get("severity") or "info").lower()
+        if severity not in {"critical", "high", "medium", "low", "info"}:
+            severity = "info"
+        normalized.append(
+            NormalizedFinding(
+                finding_id=finding_identifier(source, asset, title),
+                title=title,
+                severity=severity,
+                category="ai-security-review",
+                asset=asset,
+                source=source,
+                evidence=str(item.get("evidence") or ""),
+                impact=str(item.get("impact") or "AI-assisted review identified a security risk that needs operator validation."),
+                remediation=str(item.get("remediation") or "Validate the issue manually and apply the appropriate defensive fix."),
+            )
+        )
+    return sorted(normalized, key=finding_sort_key)
+
+
+def build_ai_security_markdown(mode: str, asset: str, ai_result: dict[str, object]) -> str:
+    analysis = ai_result.get("analysis") if isinstance(ai_result, dict) else None
+    lines = [
+        "# AI Security Audit",
+        "",
+        f"- Mode: {mode}",
+        f"- Asset: {asset}",
+        f"- Model: {ai_result.get('model', 'unknown')}",
+        f"- Generated UTC: {datetime.now(timezone.utc).isoformat()}",
+    ]
+    if not isinstance(analysis, dict):
+        lines.extend(["", "OpenRouter response could not be parsed as structured JSON. Review the raw JSON artifact."])
+        return "\n".join(lines) + "\n"
+
+    lines.extend(
+        [
+            f"- Risk score: {analysis.get('risk_score', 'n/a')}",
+            "",
+            "## Executive Summary",
+            str(analysis.get("executive_summary") or analysis.get("summary") or "No summary returned."),
+            "",
+            "## Attack Surface",
+        ]
+    )
+    attack_surface = analysis.get("attack_surface", [])
+    if isinstance(attack_surface, list) and attack_surface:
+        for item in attack_surface[:20]:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- No attack surface summary returned.")
+
+    lines.extend(["", "## High-Level Attack Paths"])
+    paths = analysis.get("likely_attack_paths", [])
+    if isinstance(paths, list) and paths:
+        for item in paths[:10]:
+            if not isinstance(item, dict):
+                continue
+            lines.append(f"- {str(item.get('risk', 'info')).upper()}: {item.get('name', 'Unnamed path')}")
+    else:
+        lines.append("- No high-level attack paths returned.")
+
+    lines.extend(["", "## Monitoring Rules"])
+    rules = analysis.get("monitoring_rules", [])
+    if isinstance(rules, list) and rules:
+        for item in rules[:20]:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- No monitoring rules returned.")
+
+    lines.extend(["", "## Next Steps"])
+    next_steps = analysis.get("next_steps", [])
+    if isinstance(next_steps, list) and next_steps:
+        for item in next_steps[:20]:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- Validate AI-prioritized findings manually and update the workspace report.")
+    return "\n".join(lines) + "\n"
+
+
+def ai_web_audit(
+    url: str,
+    timeout: float,
+    delay: float,
+    use_searchsploit: bool,
+    use_nikto: bool,
+    nikto_timeout: float,
+    api_key: str | None,
+    model: str,
+    ai_timeout: float,
+    output_dir: str | None = None,
+) -> dict[str, object]:
+    api_key_value(api_key, OPENROUTER_API_KEY_ENV, "OpenRouter")
+    normalized = normalize_url(url)
+    scan_result = web_vulnerability_search(
+        normalized,
+        timeout=timeout,
+        delay=delay,
+        use_searchsploit=use_searchsploit,
+        use_nikto=use_nikto,
+        nikto_timeout=nikto_timeout,
+    )
+    ai_result = openrouter_web_vulnerability_analysis(
+        scan_result,
+        api_key=api_key,
+        model=model,
+        timeout=ai_timeout,
+    )
+    result: dict[str, object] = {
+        "url": normalized,
+        "scan": scan_result,
+        "ai": ai_result,
+    }
+    if output_dir:
+        paths = build_workflow_paths(
+            name=f"ai-web-audit-{target_domain(normalized)}",
+            client="AI Web Audit",
+            target=normalized,
+            output_dir=output_dir,
+        )
+        write_json_output(paths["scans"] / "ai-web-audit.json", result)
+        normalized_findings = normalize_web_findings(normalized, scan_result.get("findings", []), "ai-web-audit")
+        normalized_findings.extend(normalize_ai_web_findings(normalized, ai_result, "ai-web-audit"))
+        result["workspace"] = str(paths["base"])
+        result["report_artifacts"] = write_client_report_artifacts(
+            paths,
+            "ai-web-audit-report",
+            "AI Web Audit Client Report",
+            normalized,
+            sorted(normalized_findings, key=finding_sort_key),
+        )
+        write_json_output(paths["reports"] / "ai-web-audit.json", result)
+    return result
+
+
+def load_workspace_ai_evidence(workspace: str) -> dict[str, object]:
+    workspace_path = Path(workspace).expanduser()
+    if not workspace_path.exists() or not workspace_path.is_dir():
+        raise ValueError(f"Workspace not found: {workspace_path}")
+    evidence: dict[str, object] = {"workspace": str(workspace_path), "scope": {}, "findings": [], "scan_summaries": []}
+    scope_path = workspace_path / "scope.json"
+    if scope_path.exists():
+        try:
+            loaded = json.loads(scope_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                evidence["scope"] = loaded
+        except json.JSONDecodeError:
+            evidence["scope"] = {"error": "scope.json was not valid JSON"}
+
+    findings_dir = workspace_path / "findings"
+    if findings_dir.exists():
+        findings: list[object] = []
+        for path in sorted(findings_dir.glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            findings.append({"file": str(path), "data": data})
+        evidence["findings"] = findings
+
+    scans_dir = workspace_path / "scans"
+    if scans_dir.exists():
+        scan_summaries: list[dict[str, object]] = []
+        for path in sorted(scans_dir.glob("*.json"))[:25]:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            scan_summaries.append({"file": str(path), "data": compact_for_ai(data)})
+        evidence["scan_summaries"] = scan_summaries
+    return evidence
+
+
+def ai_security_audit(
+    mode: str,
+    api_key: str | None,
+    model: str,
+    ai_timeout: float,
+    output_dir: str | None,
+    target: str | None = None,
+    url: str | None = None,
+    ports: str = "common",
+    timeout: float = 5.0,
+    iterations: int = 1,
+    interval: float = 3.0,
+    show_all: bool = False,
+    log_file: str | None = None,
+    log_lines: int = 200,
+    log_follow: bool = False,
+    log_duration: int = 60,
+    alerts_only: bool = True,
+    workspace: str | None = None,
+    iocs: list[str] | None = None,
+) -> dict[str, object]:
+    if mode not in AI_SECURITY_MODES:
+        raise ValueError(f"--mode must be one of: {', '.join(AI_SECURITY_MODES)}")
+    api_key_value(api_key, OPENROUTER_API_KEY_ENV, "OpenRouter")
+
+    if mode == "web":
+        if not url:
+            raise ValueError("--url is required for --mode web.")
+        return ai_web_audit(
+            url,
+            timeout=timeout,
+            delay=0.2,
+            use_searchsploit=True,
+            use_nikto=False,
+            nikto_timeout=180.0,
+            api_key=api_key,
+            model=model,
+            ai_timeout=ai_timeout,
+            output_dir=output_dir,
+        )
+
+    asset = target or url or workspace or log_file or socket.gethostname()
+    collector_result: object
+    workspace_path: Path | None = None
+
+    if mode == "network":
+        collector_result = connection_watch(iterations=iterations, interval=interval, show_all=show_all, output_dir=output_dir)
+        if isinstance(collector_result, dict) and collector_result.get("workspace"):
+            workspace_path = Path(str(collector_result["workspace"]))
+        asset = str(collector_result.get("asset", asset)) if isinstance(collector_result, dict) else str(asset)
+    elif mode == "local":
+        collector_result = local_posture(output_dir=output_dir)
+        if isinstance(collector_result, dict) and collector_result.get("workspace"):
+            workspace_path = Path(str(collector_result["workspace"]))
+        asset = str(collector_result.get("host", asset)) if isinstance(collector_result, dict) else str(asset)
+    elif mode == "log":
+        if not log_file:
+            raise ValueError("--log-file is required for --mode log.")
+        collector_result = log_watch(log_file, lines=log_lines, follow=log_follow, duration=log_duration, alerts_only=alerts_only, output_dir=output_dir)
+        if isinstance(collector_result, dict) and collector_result.get("workspace"):
+            workspace_path = Path(str(collector_result["workspace"]))
+        asset = str(log_file)
+    elif mode == "workspace":
+        if not workspace:
+            raise ValueError("--workspace is required for --mode workspace.")
+        collector_result = load_workspace_ai_evidence(workspace)
+        workspace_path = Path(workspace).expanduser()
+        scope = collector_result.get("scope", {}) if isinstance(collector_result, dict) else {}
+        if isinstance(scope, dict):
+            asset = str(scope.get("target") or workspace_path.name)
+    elif mode == "ioc":
+        if not iocs:
+            raise ValueError("Provide IOC values after -- for --mode ioc, or use --ioc more than once.")
+        collector_result = {"iocs": ioc_triage(iocs)}
+        if output_dir:
+            paths = build_workflow_paths("ai-ioc-audit", "AI IOC Audit", "ioc-review", output_dir)
+            workspace_path = paths["base"]
+            write_json_output(paths["scans"] / "ioc-triage.json", collector_result)
+        asset = "ioc-review"
+    else:
+        if not target:
+            raise ValueError("--target is required for --mode live.")
+        collector_result = live_workflow(target=target, url=url, ports=ports, timeout=timeout)
+        if output_dir:
+            paths = build_workflow_paths(f"ai-live-{target}", "AI Live Audit", target, output_dir)
+            workspace_path = paths["base"]
+            write_json_output(paths["scans"] / "live-workflow.json", collector_result)
+        asset = target
+
+    evidence = {"mode": mode, "asset": asset, "collector_result": collector_result}
+    ai_result = openrouter_security_analysis(
+        mode=mode,
+        evidence=evidence,
+        api_key=api_key,
+        model=model,
+        timeout=ai_timeout,
+    )
+    result: dict[str, object] = {
+        "mode": mode,
+        "asset": asset,
+        "collector_result": collector_result,
+        "ai": ai_result,
+    }
+
+    if workspace_path:
+        scans_dir = workspace_path / "scans"
+        findings_dir = workspace_path / "findings"
+        reports_dir = workspace_path / "reports"
+        notes_dir = workspace_path / "notes"
+        for path in (scans_dir, findings_dir, reports_dir, notes_dir):
+            path.mkdir(parents=True, exist_ok=True)
+        write_json_output(scans_dir / "ai-security-audit.json", result)
+        ai_findings = normalize_ai_security_findings(str(asset), ai_result, f"ai-security-audit-{mode}")
+        write_json_output(findings_dir / "ai-security-audit.json", [asdict(item) for item in ai_findings])
+        (reports_dir / "ai-security-audit.md").write_text(
+            build_ai_security_markdown(mode, str(asset), ai_result),
+            encoding="utf-8",
+        )
+        result["workspace"] = str(workspace_path)
+        result["report_artifacts"] = {
+            "findings": str(findings_dir / "ai-security-audit.json"),
+            "report": str(reports_dir / "ai-security-audit.md"),
+        }
+        write_json_output(reports_dir / "ai-security-audit.json", result)
+    return result
 
 
 def summarize_shodan_service(banner: dict[str, object]) -> dict[str, object]:
@@ -4917,6 +5605,25 @@ def build_web_workflow_markdown(result: dict[str, object]) -> str:
     else:
         lines.append("- No obvious baseline web issues were detected in the current run.")
 
+    ai_result = result.get("ai_analysis", {}) if isinstance(result.get("ai_analysis"), dict) else {}
+    ai_analysis = ai_result.get("analysis", {}) if isinstance(ai_result.get("analysis"), dict) else {}
+    if ai_analysis:
+        lines.extend(
+            [
+                "",
+                "## AI Analysis",
+                f"- Model: {ai_result.get('model', 'unknown')}",
+                f"- Risk score: {ai_analysis.get('risk_score', 'n/a')}",
+                f"- Summary: {ai_analysis.get('summary', 'n/a')}",
+            ]
+        )
+        ai_findings = ai_analysis.get("findings", [])
+        if isinstance(ai_findings, list) and ai_findings:
+            lines.append("- AI-prioritized findings:")
+            for item in ai_findings[:8]:
+                if isinstance(item, dict):
+                    lines.append(f"  - {str(item.get('severity', 'info')).upper()}: {item.get('title', 'Untitled finding')}")
+
     surface = baseline.get("surface", {}) if isinstance(baseline.get("surface"), dict) else {}
     html_summary = surface.get("html_summary", {}) if isinstance(surface.get("html_summary"), dict) else {}
     lines.extend(
@@ -4948,6 +5655,9 @@ def web_workflow(
     run_fingerprint: bool,
     run_tls_audit: bool,
     run_js_audit: bool,
+    run_ai_analysis: bool,
+    openrouter_api_key: str | None,
+    openrouter_model: str,
     install_missing: bool,
     package_manager: str | None,
 ) -> dict[str, object]:
@@ -4972,6 +5682,7 @@ def web_workflow(
         "fingerprint": None,
         "tls_audit": None,
         "js_audit": None,
+        "ai_analysis": None,
         "report_artifacts": None,
     }
 
@@ -5028,6 +5739,15 @@ def web_workflow(
         )
         write_json_output(paths["scans"] / "js-audit.json", results["js_audit"])
 
+    if run_ai_analysis:
+        results["ai_analysis"] = openrouter_web_vulnerability_analysis(
+            results["web_search"],
+            api_key=openrouter_api_key,
+            model=openrouter_model,
+            timeout=max(timeout * 12, 60.0),
+        )
+        write_json_output(paths["scans"] / "ai-web-analysis.json", results["ai_analysis"])
+
     summary_path = paths["notes"] / "web-summary.md"
     summary_path.write_text(build_web_workflow_markdown(results), encoding="utf-8")
     normalized_findings = normalize_web_findings(
@@ -5035,12 +5755,14 @@ def web_workflow(
         results.get("web_search", {}).get("findings", []) if isinstance(results.get("web_search"), dict) else [],
         "web-workflow",
     )
+    if isinstance(results.get("ai_analysis"), dict):
+        normalized_findings.extend(normalize_ai_web_findings(normalized, results["ai_analysis"], "web-workflow-ai"))
     results["report_artifacts"] = write_client_report_artifacts(
         paths,
         "web-client-report",
         "Web Workflow Client Report",
         normalized,
-        normalized_findings,
+        sorted(normalized_findings, key=finding_sort_key),
     )
     write_json_output(paths["reports"] / "web-workflow.json", results)
     print(f"\n[+] Web workflow saved to {summary_path}")
@@ -7613,6 +8335,7 @@ def doctor(categories: list[str] | None = None) -> dict[str, object]:
         SHODAN_API_KEY_ENV: bool(os.environ.get(SHODAN_API_KEY_ENV)),
         NVD_API_KEY_ENV: bool(os.environ.get(NVD_API_KEY_ENV)),
         VIRUSTOTAL_API_KEY_ENV: bool(os.environ.get(VIRUSTOTAL_API_KEY_ENV)),
+        OPENROUTER_API_KEY_ENV: bool(os.environ.get(OPENROUTER_API_KEY_ENV)),
     }
     print("\n[API keys]")
     for env_name, present in api_keys.items():
@@ -7640,7 +8363,7 @@ def doctor(categories: list[str] | None = None) -> dict[str, object]:
     print(f"  subdomains: {seclists['subdomains'] or 'missing'}")
 
     tool_report = check_tools(selected_categories)
-    workflow_report = workflow_readiness(["target-brief", "recon-workflow", "web-workflow", "local-posture", "vps-check"])
+    workflow_report = workflow_readiness(["target-brief", "recon-workflow", "web-workflow", "ai-web-audit", "ai-security-audit", "local-posture", "vps-check"])
     missing_tools = sorted(
         item["tool"]
         for items in tool_report.values()
@@ -7897,6 +8620,50 @@ def build_parser() -> argparse.ArgumentParser:
     )
     web_vuln_parser.add_argument("--nikto-timeout", type=float, default=180.0, help="Nikto timeout in seconds.")
 
+    ai_web_parser = subparsers.add_parser(
+        "ai-web-audit",
+        aliases=["ai-vuln", "ai-web-vuln"],
+        help="Run safe web checks and ask OpenRouter to prioritize likely vulnerabilities.",
+    )
+    add_common_run_options(ai_web_parser)
+    ai_web_parser.add_argument("url", help="Authorized base URL to audit.")
+    ai_web_parser.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout in seconds.")
+    ai_web_parser.add_argument("--delay", type=float, default=0.2, help="Delay between exposure checks.")
+    ai_web_parser.add_argument("--no-searchsploit", action="store_true", help="Skip local Exploit-DB metadata lookup.")
+    ai_web_parser.add_argument("--nikto", action="store_true", help="Run Nikto if installed. This is an active scanner.")
+    ai_web_parser.add_argument("--nikto-timeout", type=float, default=180.0, help="Nikto timeout in seconds.")
+    ai_web_parser.add_argument("--api-key", help=f"OpenRouter API key. Defaults to {OPENROUTER_API_KEY_ENV}.")
+    ai_web_parser.add_argument("--model", default=DEFAULT_OPENROUTER_MODEL, help="OpenRouter model ID.")
+    ai_web_parser.add_argument("--ai-timeout", type=float, default=60.0, help="OpenRouter API timeout in seconds.")
+    ai_web_parser.add_argument("--output-dir", help="Workspace directory for saved scan output and report artifacts.")
+
+    ai_security_parser = subparsers.add_parser(
+        "ai-security-audit",
+        aliases=["ai-redteam", "ai-pentest"],
+        help="Run safe collectors and use OpenRouter for authorized security prioritization.",
+    )
+    add_common_run_options(ai_security_parser)
+    ai_security_parser.add_argument("--mode", choices=AI_SECURITY_MODES, default="network", help="Evidence collector to run before AI analysis.")
+    ai_security_parser.add_argument("--target", help="Authorized host/IP for live mode.")
+    ai_security_parser.add_argument("--url", help="Authorized URL for web or live mode.")
+    ai_security_parser.add_argument("--ports", default="common", help="Port list/range for live mode.")
+    ai_security_parser.add_argument("--timeout", type=float, default=5.0, help="Collector network timeout in seconds.")
+    ai_security_parser.add_argument("--iterations", type=int, default=1, help="Network monitor iterations for network mode.")
+    ai_security_parser.add_argument("--interval", type=float, default=3.0, help="Delay between network monitor iterations.")
+    ai_security_parser.add_argument("--show-all", action="store_true", help="Show all connections in network mode, not just alerts.")
+    ai_security_parser.add_argument("--log-file", help="Log file path for log mode.")
+    ai_security_parser.add_argument("--log-lines", type=int, default=200, help="Number of log lines to inspect in log mode.")
+    ai_security_parser.add_argument("--follow", action="store_true", help="Follow the log for --log-duration seconds in log mode.")
+    ai_security_parser.add_argument("--log-duration", type=int, default=60, help="Follow duration in seconds for log mode.")
+    ai_security_parser.add_argument("--all-log-lines", action="store_true", help="Send all sampled log lines, not only alert-matching lines.")
+    ai_security_parser.add_argument("--workspace", help="Existing KTOOL workspace path for workspace mode.")
+    ai_security_parser.add_argument("--ioc", action="append", help="IOC value for ioc mode. Can be used more than once.")
+    ai_security_parser.add_argument("--api-key", help=f"OpenRouter API key. Defaults to {OPENROUTER_API_KEY_ENV}.")
+    ai_security_parser.add_argument("--model", default=DEFAULT_OPENROUTER_MODEL, help="OpenRouter model ID.")
+    ai_security_parser.add_argument("--ai-timeout", type=float, default=60.0, help="OpenRouter API timeout in seconds.")
+    ai_security_parser.add_argument("--output-dir", help="Workspace directory for saved scan output and report artifacts.")
+    ai_security_parser.add_argument("ioc_values", nargs="*", help="Additional IOC values for ioc mode.")
+
     seclists_parser = subparsers.add_parser("seclists-find", help="Find installed SecLists roots and common wordlists.")
     seclists_parser.add_argument("--category", choices=sorted(SECLISTS_WORDLISTS), help="Show one wordlist category.")
     seclists_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
@@ -8048,6 +8815,9 @@ def build_parser() -> argparse.ArgumentParser:
     web_workflow_parser.add_argument("--fingerprint", action="store_true", help="Run installed fingerprinting tools such as whatweb and httpx.")
     web_workflow_parser.add_argument("--tls-audit", action="store_true", help="Run installed TLS review tools for HTTPS targets.")
     web_workflow_parser.add_argument("--js-audit", action="store_true", help="Download same-page JavaScript and run local audit tools.")
+    web_workflow_parser.add_argument("--ai", action="store_true", help="Use OpenRouter to prioritize the collected web evidence.")
+    web_workflow_parser.add_argument("--openrouter-api-key", help=f"OpenRouter API key. Defaults to {OPENROUTER_API_KEY_ENV}.")
+    web_workflow_parser.add_argument("--openrouter-model", default=DEFAULT_OPENROUTER_MODEL, help="OpenRouter model ID.")
 
     thm_parser = subparsers.add_parser(
         "tryhackme",
@@ -8519,6 +9289,57 @@ def interactive_menu() -> None:
                     use_nikto=use_nikto,
                     nikto_timeout=180.0,
                 )
+            elif choice == "51":
+                url = input("Authorized base URL: ").strip()
+                model = input(f"OpenRouter model [{DEFAULT_OPENROUTER_MODEL}]: ").strip() or DEFAULT_OPENROUTER_MODEL
+                api_key = input(f"OpenRouter API key [{OPENROUTER_API_KEY_ENV} env]: ").strip() or None
+                output_dir = input("Workspace directory [engagements/ai-web-audit-<host>]: ").strip() or None
+                use_nikto = input("Run Nikto if installed? [y/N]: ").strip().lower() in {"y", "yes"}
+                ai_web_audit(
+                    url,
+                    timeout=5.0,
+                    delay=0.2,
+                    use_searchsploit=True,
+                    use_nikto=use_nikto,
+                    nikto_timeout=180.0,
+                    api_key=api_key,
+                    model=model,
+                    ai_timeout=60.0,
+                    output_dir=output_dir,
+                )
+            elif choice == "52":
+                mode = input(f"Mode ({'/'.join(AI_SECURITY_MODES)}) [network]: ").strip() or "network"
+                model = input(f"OpenRouter model [{DEFAULT_OPENROUTER_MODEL}]: ").strip() or DEFAULT_OPENROUTER_MODEL
+                api_key = input(f"OpenRouter API key [{OPENROUTER_API_KEY_ENV} env]: ").strip() or None
+                output_dir = input("Workspace directory [mode default]: ").strip() or None
+                target = None
+                url = None
+                log_file = None
+                workspace = None
+                iocs: list[str] = []
+                if mode == "live":
+                    target = input("Authorized host/IP: ").strip()
+                    url = input("Optional URL: ").strip() or None
+                elif mode == "web":
+                    url = input("Authorized base URL: ").strip()
+                elif mode == "log":
+                    log_file = input("Log file path: ").strip()
+                elif mode == "workspace":
+                    workspace = input("Workspace path: ").strip()
+                elif mode == "ioc":
+                    iocs = shlex.split(input("IOC values: ").strip())
+                ai_security_audit(
+                    mode=mode,
+                    api_key=api_key,
+                    model=model,
+                    ai_timeout=60.0,
+                    output_dir=output_dir,
+                    target=target,
+                    url=url,
+                    log_file=log_file,
+                    workspace=workspace,
+                    iocs=iocs,
+                )
             elif choice == "28":
                 show_all = input("Show all connections? [y/N]: ").strip().lower() in {"y", "yes"}
                 output_dir = input("Workspace directory [engagements/connection-watch-<hostname>]: ").strip() or None
@@ -8595,6 +9416,8 @@ def interactive_menu() -> None:
                 run_fingerprint = input("Run fingerprint tools? [y/N]: ").strip().lower() in {"y", "yes"}
                 run_tls_audit = input("Run TLS audit tools? [y/N]: ").strip().lower() in {"y", "yes"}
                 run_js_audit = input("Run JS audit? [y/N]: ").strip().lower() in {"y", "yes"}
+                run_ai_analysis = input("Run OpenRouter AI analysis? [y/N]: ").strip().lower() in {"y", "yes"}
+                openrouter_api_key = input(f"OpenRouter API key [{OPENROUTER_API_KEY_ENV} env]: ").strip() or None if run_ai_analysis else None
                 use_nikto = input("Run Nikto if installed? [y/N]: ").strip().lower() in {"y", "yes"}
                 web_workflow(
                     url=url,
@@ -8608,6 +9431,9 @@ def interactive_menu() -> None:
                     run_fingerprint=run_fingerprint,
                     run_tls_audit=run_tls_audit,
                     run_js_audit=run_js_audit,
+                    run_ai_analysis=run_ai_analysis,
+                    openrouter_api_key=openrouter_api_key,
+                    openrouter_model=DEFAULT_OPENROUTER_MODEL,
                     install_missing=False,
                     package_manager=None,
                 )
@@ -8817,6 +9643,9 @@ def main(argv: list[str] | None = None) -> int:
                 run_fingerprint=args.fingerprint,
                 run_tls_audit=args.tls_audit,
                 run_js_audit=args.js_audit,
+                run_ai_analysis=args.ai,
+                openrouter_api_key=args.openrouter_api_key,
+                openrouter_model=args.openrouter_model,
                 install_missing=args.install_missing,
                 package_manager=args.package_manager,
             )
@@ -9030,6 +9859,46 @@ def main(argv: list[str] | None = None) -> int:
                 use_searchsploit=not args.no_searchsploit,
                 use_nikto=args.nikto,
                 nikto_timeout=args.nikto_timeout,
+            )
+        elif args.command in {"ai-web-audit", "ai-vuln", "ai-web-vuln"}:
+            results = ai_web_audit(
+                args.url,
+                timeout=args.timeout,
+                delay=args.delay,
+                use_searchsploit=not args.no_searchsploit,
+                use_nikto=args.nikto,
+                nikto_timeout=args.nikto_timeout,
+                api_key=args.api_key,
+                model=args.model,
+                ai_timeout=args.ai_timeout,
+                output_dir=args.output_dir,
+            )
+        elif args.command in {"ai-security-audit", "ai-redteam", "ai-pentest"}:
+            ioc_values = []
+            if args.ioc:
+                ioc_values.extend(args.ioc)
+            if args.ioc_values:
+                ioc_values.extend(args.ioc_values)
+            results = ai_security_audit(
+                mode=args.mode,
+                api_key=args.api_key,
+                model=args.model,
+                ai_timeout=args.ai_timeout,
+                output_dir=args.output_dir,
+                target=args.target,
+                url=args.url,
+                ports=args.ports,
+                timeout=args.timeout,
+                iterations=args.iterations,
+                interval=args.interval,
+                show_all=args.show_all,
+                log_file=args.log_file,
+                log_lines=args.log_lines,
+                log_follow=args.follow,
+                log_duration=args.log_duration,
+                alerts_only=not args.all_log_lines,
+                workspace=args.workspace,
+                iocs=ioc_values,
             )
         elif args.command in {"content-discovery", "gobuster", "ffuf", "dirb"}:
             selected_tool = args.tool or (args.command if args.command in {"gobuster", "ffuf", "dirb"} else "gobuster")

@@ -49,9 +49,15 @@ ktool workflow-ready
 
 - package-manager detection
 - Python package state
-- API key presence for `SHODAN_API_KEY`, `NVD_API_KEY`, and `VIRUSTOTAL_API_KEY`
+- API key presence for `SHODAN_API_KEY`, `NVD_API_KEY`, `VIRUSTOTAL_API_KEY`, and `OPENROUTER_API_KEY`
 - SecLists availability
 - installed external tools by category
+
+For AI-assisted web review, set your OpenRouter key in the shell before running KTOOL:
+
+```bash
+export OPENROUTER_API_KEY="your-openrouter-key"
+```
 
 ## Interactive Menu
 
@@ -162,8 +168,31 @@ ktool headers https://example.com --yes-i-am-authorized
 ktool dirs https://example.com --yes-i-am-authorized
 ktool web https://example.com --yes-i-am-authorized
 ktool web-vuln-search https://example.com --yes-i-am-authorized
+ktool ai-web-audit https://example.com --yes-i-am-authorized
+ktool web-workflow https://example.com --ai --yes-i-am-authorized
+ktool ai-security-audit --mode network --iterations 3 --yes-i-am-authorized
+ktool ai-security-audit --mode local --yes-i-am-authorized
+ktool ai-security-audit --mode log --log-file /var/log/auth.log --yes-i-am-authorized
+ktool ai-security-audit --mode workspace --workspace engagements/acme-external --yes-i-am-authorized
+ktool ai-security-audit --mode ioc 8.8.8.8 https://secure-login-account.top --yes-i-am-authorized
 ktool content-discovery https://example.com --tool gobuster --wordlist-kind directory-small --yes-i-am-authorized
 ```
+
+`ai-web-audit` sends a compact summary of safe baseline web evidence to OpenRouter for defensive prioritization. It does not send exploit payloads or attempt exploitation.
+
+`ai-security-audit` adds broader AI-assisted red-team style prioritization for authorized work:
+
+- `network`: watches local TCP/UDP connections and highlights risky listeners or sessions.
+- `local`: reviews local privilege-risk posture.
+- `log`: reviews security-relevant log lines.
+- `workspace`: reviews an existing KTOOL workspace and generated findings.
+- `ioc`: triages indicators and asks AI to prioritize risk.
+- `live`: runs DNS, port checks, and optional web baseline for one authorized target.
+- `web`: aliases the AI web audit workflow.
+
+The AI output is designed for defensive planning: risk scoring, high-level attack paths, monitoring ideas, validation steps, and remediation. It does not generate exploit code, phishing content, credential attacks, persistence, or evasion steps.
+
+Because AI modes send selected evidence to OpenRouter, avoid using them on client data unless your rules of engagement allow third-party AI processing. Review generated artifacts before sharing them.
 
 ### Threat / Defensive Triage
 
