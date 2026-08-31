@@ -49,4 +49,10 @@ jobs:
           python tool.py --version
           python tool.py --help > /dev/null
           python tool.py learn > /dev/null
+          python tool.py learn ctf > /dev/null
           python tool.py recoon --kind web --commands-only > /dev/null
+          python tool.py completion bash > /dev/null
+          python tool.py completion zsh > /dev/null
+          printf 'x flag{ci_smoke_test}\n' | python tool.py ctf flag --stdin | grep -q ci_smoke_test
+          mkdir -p /tmp/chal && printf 'PK\x03\x04' > /tmp/chal/a.zip
+          python tool.py ctf triage /tmp/chal > /dev/null

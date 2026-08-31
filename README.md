@@ -8,6 +8,21 @@ KTOOL FieldOps is a terminal-first security operations console for authorized wo
 - Treat it as an operator workflow tool, not a magic scanner.
 - Save evidence, notes, and reports as you work.
 
+## CLI-first
+
+KTOOL is a command-line tool. Every capability is a subcommand — run
+`ktool <command> --help`. The interactive menu (`ktool` with no arguments) is
+just a launcher for the same subcommands and is optional.
+
+```bash
+ktool --help                       # all commands
+ktool completion zsh > ~/.zfunc/_ktool   # shell completion (bash or zsh)
+```
+
+New to security? Start with `ktool learn` and
+[docs/STUDENT_GUIDE.md](docs/STUDENT_GUIDE.md). Doing CTFs or lab boxes? See
+[docs/CTF_GUIDE.md](docs/CTF_GUIDE.md).
+
 ## Install
 
 Make the launchers executable:
@@ -156,6 +171,21 @@ ktool web-workflow https://example.com --fingerprint --tls-audit --js-audit --ye
 ```
 
 ## Common Commands
+
+### CTF and Lab Boxes
+
+Full guide: [docs/CTF_GUIDE.md](docs/CTF_GUIDE.md).
+
+```bash
+ktool ctf box 10.10.11.42 --yes-i-am-authorized      # recon + per-service playbook
+ktool ctf flag --path ./loot                          # hunt flag{...}/HTB{...}/THM{...}
+ktool ctf flag --url http://10.10.11.42/ --yes-i-am-authorized
+cat file.bin | ktool ctf flag --stdin
+ktool ctf triage ./downloads/chal                     # identify files, suggest tools
+ktool ctf fetch --url https://ctf.example.com --details   # pull CTFd challenge list
+```
+
+These commands enumerate and organize only — no exploitation or brute force.
 
 ### Recoon Tool Index
 

@@ -32,3 +32,5 @@ CI runs the same steps on Python 3.10, 3.12, and 3.13.
   any new input parser.
 - If you add a user-facing command group, add a matching `learn` topic in
   `LEARN_TOPICS` so students get context.
+- CTF helpers live under `ktool ctf` and stay enumeration-only (no exploitation,
+  no auto-submission of flags). See [docs/CTF_GUIDE.md](docs/CTF_GUIDE.md).
