@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dev dependencies
+        run: python -m pip install --upgrade pip .[dev]
+
+      - name: Compile check
+        run: python -m compileall -q tool.py
+
+      - name: Lint (ruff)
+        run: ruff check tool.py tests
+
+      - name: Static security scan (bandit)
+        run: bandit -q -r tool.py -c pyproject.toml
+
+      - name: Tests (pytest)
+        run: pytest -q
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: CLI smoke test
+        run: |
+          python tool.py --version
+          python tool.py --help > /dev/null
+          python tool.py learn > /dev/null
+          python tool.py recoon --kind web --commands-only > /dev/null

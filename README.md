@@ -59,6 +59,24 @@ For AI-assisted web review, set your OpenRouter key in the shell before running 
 export OPENROUTER_API_KEY="your-openrouter-key"
 ```
 
+## For Students
+
+New to security? Start with the built-in concept explainer, then follow
+[docs/STUDENT_GUIDE.md](docs/STUDENT_GUIDE.md).
+
+```bash
+ktool learn                 # list topics
+ktool learn authorization   # scope, permission, ethics
+ktool learn recon
+ktool learn web
+ktool learn vulns
+ktool learn defense
+ktool learn reporting
+```
+
+Each topic explains the concept, the common mistakes, the KTOOL commands that
+apply, and further reading (OWASP WSTG, PTES, MITRE ATT&CK).
+
 ## Interactive Menu
 
 Launch the interactive console:
@@ -352,3 +370,20 @@ Optional auto-deploy helper:
 ./ktool-auto-deploy.sh unschedule
 ./ktool-auto-deploy.sh uninstall
 ```
+
+## Development
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+ruff check tool.py tests
+bandit -q -r tool.py -c pyproject.toml
+pytest -q
+```
+
+CI (`.github/workflows/ci.yml`) runs lint, static security analysis, tests, and
+a CLI smoke test on Python 3.10 / 3.12 / 3.13 for every push and pull request.
+
+See [SECURITY.md](SECURITY.md) for the hardening model and how to report a
+vulnerability, and [CONTRIBUTING.md](CONTRIBUTING.md) for the ground rules.
