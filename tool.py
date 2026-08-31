@@ -21,11 +21,11 @@ import os
 import platform
 import pty
 import re
-import select
 import secrets
-import signal
+import select
 import shlex
 import shutil
+import signal
 import socket
 import ssl
 import stat
@@ -34,14 +34,13 @@ import subprocess
 import sys
 import time
 import zipfile
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
-
 
 COMMON_PORTS = [
     21,
@@ -132,7 +131,7 @@ SECURITY_HEADERS = {
 }
 
 TOOL_NAME = "KTOOL FieldOps"
-TOOL_VERSION = "4.0.0"
+TOOL_VERSION = "4.1.0"
 TOOL_OWNER = "Field operator"
 TOOL_TAGLINE = "authorized security operations console"
 TOOL_COMMAND = "ktool"
@@ -1222,22 +1221,57 @@ def require_authorization(assume_yes: bool) -> None:
         raise SystemExit(1)
 
 
+def _reject_control_chars(value: str, label: str) -> None:
+    """Block whitespace and control/NUL characters that enable argument or
+    header injection when a value is later handed to an external tool or URL."""
+    if len(value) > 2048:
+        raise ValueError(f"{label} is too long (max 2048 characters).")
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        raise ValueError(f"{label} contains control characters.")
+    if any(char.isspace() for char in value):
+        raise ValueError(f"{label} must not contain whitespace.")
+
+
 def normalize_url(raw_url: str) -> str:
+    raw_url = raw_url.strip()
+    _reject_control_chars(raw_url, "URL")
     parsed = urlparse(raw_url)
     if not parsed.scheme:
         raw_url = f"https://{raw_url}"
         parsed = urlparse(raw_url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError(f"Invalid URL: {raw_url}")
+    if "@" in parsed.netloc:
+        raise ValueError("Embedded credentials in URLs are not allowed.")
     return raw_url.rstrip("/")
+
+
+# Hostnames, IPv4/IPv6 literals, and bracketed IPv6. Deliberately strict so a
+# target string can never be interpreted as a CLI flag by a wrapped tool.
+_HOST_PATTERN = re.compile(
+    r"\A(?:"
+    r"\[[0-9A-Fa-f:]+\]"  # bracketed IPv6
+    r"|[0-9A-Fa-f:]+"  # bare IPv6 / IPv4
+    r"|(?:[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,62})\.?)+"  # dotted hostname labels
+    r")\Z"
+)
 
 
 def validate_host(host: str) -> str:
     host = host.strip()
     if not host:
         raise ValueError("Target host cannot be empty.")
+    _reject_control_chars(host, "Target host")
+    if host.startswith("-"):
+        raise ValueError("Target host must not start with '-' (argument injection).")
     if "/" in host:
         raise ValueError("Use a hostname or IP address, not a URL or CIDR range.")
+    try:
+        return str(ipaddress.ip_address(host.strip("[]")))
+    except ValueError:
+        pass
+    if not _HOST_PATTERN.match(host):
+        raise ValueError(f"Invalid target host: {host!r}")
     return host
 
 
@@ -2344,7 +2378,6 @@ def web_vulnerability_search(
     nikto_timeout: float,
 ) -> dict[str, object]:
     normalized = normalize_url(url)
-    parsed = urlparse(normalized)
     print(f"\n[+] Web vulnerability search for {normalized}")
     print("[i] This checks metadata and common misconfigurations; it does not exploit vulnerabilities.")
 
@@ -3580,6 +3613,8 @@ def print_install_hints(tool: str | None = None) -> dict[str, object]:
 
 
 def run_external(command: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+    if any("\x00" in part for part in command):
+        raise ValueError("Command arguments must not contain NUL bytes.")
     try:
         return subprocess.run(
             command,
@@ -4803,9 +4838,9 @@ def normalize_connection_findings(
             severity = "medium"
             if any(port in {23, 2323, 4444, 5555, 6667, 1337, 31337} for port in (local_port, remote_port)):
                 severity = "critical" if state == "LISTEN" else "high"
-            elif any(port in HIGH_RISK_LISTEN_PORTS for port in (local_port, remote_port)):
-                severity = "high"
-            elif "external remote endpoint" in reasons and "listening on all interfaces" in reasons:
+            elif any(port in HIGH_RISK_LISTEN_PORTS for port in (local_port, remote_port)) or (
+                "external remote endpoint" in reasons and "listening on all interfaces" in reasons
+            ):
                 severity = "high"
             title = "Suspicious Listening Service Detected" if state == "LISTEN" else "Suspicious Network Connection Detected"
             flow = local or "-"
@@ -5079,7 +5114,6 @@ def normalize_intel_findings(asset: str, result: dict[str, object], source: str)
             ports = summary.get("ports", []) if isinstance(summary.get("ports"), list) else []
             risky_ports = sorted(port for port in ports if port in HIGH_RISK_LISTEN_PORTS or port in SUSPICIOUS_PORTS)
             if risky_ports:
-                max_port = risky_ports[0] if risky_ports else None
                 severity = "critical" if any(port in {23, 2323, 2375} for port in risky_ports) else "high"
                 add_finding(
                     title="Risky Internet-Exposed Services Indexed",
@@ -5462,9 +5496,9 @@ def build_recon_workflow_markdown(result: dict[str, object]) -> str:
         [
             "",
             "## Suggested Next Steps",
-            f"- Review `scans/ports.json` and `scans/nmap-first-pass.json` before moving deeper.",
+            "- Review `scans/ports.json` and `scans/nmap-first-pass.json` before moving deeper.",
             f"- If a web service is present, run `ktool web-workflow https://{target} --yes-i-am-authorized` with the correct URL.",
-            f"- Save evidence and service hypotheses in `notes/README.md` while triaging likely attack surface.",
+            "- Save evidence and service hypotheses in `notes/README.md` while triaging likely attack surface.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -8408,6 +8442,143 @@ def doctor(categories: list[str] | None = None) -> dict[str, object]:
     }
 
 
+LEARN_TOPICS: dict[str, dict[str, object]] = {
+    "authorization": {
+        "title": "Authorization and scope",
+        "summary": (
+            "Every active check in this tool is only legal and ethical against assets you "
+            "own or have explicit written permission to test."
+        ),
+        "points": [
+            "Get scope in writing: targets, time windows, allowed techniques, and contacts.",
+            "The --yes-i-am-authorized flag is a self-attestation, not a permission grant.",
+            "Passive OSINT still has limits: respect rate limits, terms of service, and privacy law.",
+            "Stop and report if you find evidence of a prior compromise.",
+        ],
+        "commands": ["target-brief", "lab-init", "workflow-ready"],
+        "reading": [
+            "PTES Pre-engagement Interactions",
+            "OWASP Web Security Testing Guide - Introduction",
+        ],
+    },
+    "recon": {
+        "title": "Reconnaissance",
+        "summary": (
+            "Recon builds a map of the target: DNS records, subdomains, open ports, and "
+            "exposed services. Start passive, then move to light active checks."
+        ),
+        "points": [
+            "Passive first (osint, dns, whois, ip-intel) leaves no traffic on the target.",
+            "Active checks (ports, subs, nmap) touch the target - authorization required.",
+            "Record everything: timestamps and raw output become report evidence.",
+            "A closed port today can open tomorrow; recon is a snapshot.",
+        ],
+        "commands": ["osint", "dns", "whois", "subs", "ports", "nmap", "recon-workflow"],
+        "reading": [
+            "OWASP WSTG - Information Gathering",
+            "MITRE ATT&CK - Reconnaissance (TA0043)",
+        ],
+    },
+    "web": {
+        "title": "Web application review",
+        "summary": (
+            "Baseline web checks look at HTTP headers, TLS configuration, exposed paths, "
+            "and technology fingerprints without sending exploit payloads."
+        ),
+        "points": [
+            "Security headers (HSTS, CSP, X-Content-Type-Options) are cheap wins to check.",
+            "Directory checks use small wordlists - large brute force is out of scope here.",
+            "TLS audits flag weak protocols and ciphers, not just an expired certificate.",
+            "Fingerprinting tells you what to research for known CVEs.",
+        ],
+        "commands": ["headers", "web", "dirs", "tls-audit", "fingerprint", "web-workflow"],
+        "reading": [
+            "OWASP Secure Headers Project",
+            "OWASP WSTG - Configuration and Deployment Management Testing",
+        ],
+    },
+    "vulns": {
+        "title": "Vulnerability research",
+        "summary": (
+            "Turn service and version data into a list of candidate weaknesses using CVE "
+            "and exploit databases - then validate before you claim anything."
+        ),
+        "points": [
+            "Match the exact product and version; near-matches produce false positives.",
+            "A CVE with a high CVSS score is not automatically exploitable in context.",
+            "cve-lookup queries the NVD; vuln-lookup searches local Exploit-DB metadata.",
+            "Document your validation steps, not just the CVE id.",
+        ],
+        "commands": ["cve-lookup", "vuln-lookup", "web-vuln-search"],
+        "reading": [
+            "FIRST CVSS v3.1 Specification",
+            "NIST National Vulnerability Database docs",
+        ],
+    },
+    "defense": {
+        "title": "Defensive triage",
+        "summary": (
+            "Blue-team workflows: watch local connections, review logs, classify indicators "
+            "of compromise, and check local privilege posture."
+        ),
+        "points": [
+            "IOC triage classifies IPs, domains, URLs, and hashes with local heuristics only.",
+            "Defang indicators (hxxp, [.]) before sharing them so links are not clickable.",
+            "log-watch highlights auth failures, sudo abuse, and known attack strings.",
+            "local-posture checks for world-writable paths, weak sudo, and risky services.",
+        ],
+        "commands": ["ioc-triage", "defang", "log-watch", "conn-watch", "local-posture"],
+        "reading": [
+            "MITRE ATT&CK - Defensive tactics",
+            "SANS Incident Handler's Handbook",
+        ],
+    },
+    "reporting": {
+        "title": "Evidence and reporting",
+        "summary": (
+            "A finding only counts if it is reproducible and written down. Workflows here "
+            "save workspaces, normalized findings, and client-ready Markdown."
+        ),
+        "points": [
+            "Use --report to save raw JSON; secrets are written with mode 0600.",
+            "engagements/<name> holds scans/, findings/, notes/, and reports/.",
+            "Each finding needs: what, where, impact, evidence, and remediation.",
+            "Run 'ktool report <workspace>' to roll findings into one document.",
+        ],
+        "commands": ["target-brief", "report", "lab-init"],
+        "reading": [
+            "PTES Reporting",
+            "OWASP Risk Rating Methodology",
+        ],
+    },
+}
+
+
+def learn_topics(topic: str | None) -> list[dict[str, object]]:
+    """Student-facing concept cards for the main command groups."""
+    if topic and topic not in LEARN_TOPICS:
+        available = ", ".join(sorted(LEARN_TOPICS))
+        raise ValueError(f"Unknown learn topic {topic!r}. Available: {available}")
+
+    selected = [topic] if topic else list(LEARN_TOPICS)
+    results: list[dict[str, object]] = []
+    for key in selected:
+        data = LEARN_TOPICS[key]
+        print_section(f"Learn: {data['title']}")
+        print(str(data["summary"]))
+        print()
+        for point in data["points"]:  # type: ignore[union-attr]
+            print(f"  - {point}")
+        print(color(f"\n  try: {' , '.join('ktool ' + c for c in data['commands'])}", "90"))  # type: ignore[union-attr]
+        print(color(f"  read: {'; '.join(data['reading'])}", "90"))  # type: ignore[union-attr]
+        print()
+        results.append({"topic": key, **data})
+
+    if not topic:
+        print(color("Focus one topic with: ktool learn <topic>", "90"))
+    return results
+
+
 def save_report(path: str | None, command: str, data: Iterable[object] | object) -> None:
     if not path:
         return
@@ -8451,6 +8622,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--report", help="Write JSON report to this path.")
 
     subparsers = parser.add_subparsers(dest="command")
+
+    learn_parser = subparsers.add_parser(
+        "learn",
+        help="Explain a security concept and the commands that go with it (for students).",
+    )
+    learn_parser.add_argument(
+        "topic",
+        nargs="?",
+        choices=sorted(LEARN_TOPICS),
+        help="Concept to explain. Omit to list all topics.",
+    )
+    learn_parser.add_argument(
+        "--report",
+        default=argparse.SUPPRESS,
+        help="Write JSON report to this path.",
+    )
 
     tools_parser = subparsers.add_parser("tools", help="Check whether common Linux tools are installed.")
     tools_parser.add_argument(
@@ -9581,7 +9768,9 @@ def main(argv: list[str] | None = None) -> int:
             interactive_menu()
             return 0
 
-        if args.command == "tools":
+        if args.command == "learn":
+            results = learn_topics(args.topic)
+        elif args.command == "tools":
             results = check_tools(args.category)
         elif args.command in {"recoon", "recon"}:
             results = recoon_tools(args.kind, command_only=args.commands_only)
@@ -10040,6 +10229,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "vuln-lookup":
             results = vuln_lookup(args.query, timeout=args.timeout)
         elif args.command in {
+            "learn",
             "tools",
             "recoon",
             "recon",

@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ktool-fieldops"
+version = "4.1.0"
+description = "Terminal-first authorized security operations console for students and operators"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "kaungkhantko26" }]
+keywords = ["security", "recon", "osint", "blue-team", "education", "ctf"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Education",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6", "bandit>=1.7"]
+
+[project.scripts]
+ktool = "tool:main"
+
+[project.urls]
+Homepage = "https://github.com/kaungkhantko26/Ktool"
+Issues = "https://github.com/kaungkhantko26/Ktool/issues"
+
+[tool.setuptools]
+py-modules = ["tool"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "S", "C4", "SIM"]
+ignore = [
+    "E501",   # long lines are common in the help text tables
+    "S404",   # subprocess import is required and reviewed
+    "S603",   # subprocess calls use argument lists, never shell=True
+    "S606",   # os.execvp in sudo-su relaunch is intentional, args are a list
+    "S607",   # external security tools are resolved from PATH by design
+    "S310",   # urlopen targets pass through normalize_url scheme validation
+    "S108",   # /tmp references are world-writable-path *checks*, not file creation
+    "S110",   # best-effort cleanup in signal/pty teardown
+    "S112",   # best-effort loop over noisy filesystem entries
+    "B007",
+    "B008",
+    "SIM105",
+    "SIM108",
+    "SIM114",
+    "SIM117",
+    "UP038",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106"]
+
+[tool.bandit]
+# Each skip below is a reviewed accept for this codebase:
+#   B404/B603/B607/B606 - subprocess/execvp always use argument lists, never a shell
+#   B310                 - urlopen callers pass through normalize_url() scheme checks
+#   B108                 - "/tmp" strings are world-writable-path audits, not file creation
+#   B105/B106            - "password" here names generator parameters, not secrets
+#   B110/B112            - best-effort try/except/pass in teardown and noisy-fs loops
+skips = ["B404", "B603", "B607", "B606", "B310", "B108", "B105", "B106", "B110", "B112"]
+exclude_dirs = ["tests"]
