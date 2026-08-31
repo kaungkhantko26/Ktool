@@ -131,7 +131,7 @@ SECURITY_HEADERS = {
 }
 
 TOOL_NAME = "KTOOL FieldOps"
-TOOL_VERSION = "4.1.0"
+TOOL_VERSION = "4.2.0"
 TOOL_OWNER = "Field operator"
 TOOL_TAGLINE = "authorized security operations console"
 TOOL_COMMAND = "ktool"
@@ -8442,7 +8442,649 @@ def doctor(categories: list[str] | None = None) -> dict[str, object]:
     }
 
 
+# ============================================================================
+# CTF toolkit - lab / authorized-box helpers for students
+# ============================================================================
+
+CTF_FLAG_PATTERNS: dict[str, str] = {
+    "generic": r"[Ff][Ll][Aa][Gg]\{[^}\r\n]{1,256}\}",
+    "htb": r"HTB\{[^}\r\n]{1,256}\}",
+    "thm": r"THM\{[^}\r\n]{1,256}\}",
+    "pico": r"picoCTF\{[^}\r\n]{1,256}\}",
+    "uni": r"[A-Za-z][A-Za-z0-9_]{1,23}\{[ -z]{3,256}\}",  # broad; opt-in via --broad
+}
+
+# First-bytes signatures used by "ctf triage" for offline file identification.
+CTF_MAGIC_SIGNATURES: list[tuple[bytes, str]] = [
+    (b"\x7fELF", "ELF binary (rev / pwn)"),
+    (b"MZ", "DOS/PE executable (rev)"),
+    (b"\xca\xfe\xba\xbe", "Mach-O / Java class (rev)"),
+    (b"\x89PNG\r\n\x1a\n", "PNG image (stego)"),
+    (b"\xff\xd8\xff", "JPEG image (stego)"),
+    (b"GIF8", "GIF image (stego)"),
+    (b"BM", "BMP image (stego)"),
+    (b"%PDF-", "PDF document (forensics)"),
+    (b"PK\x03\x04", "ZIP / Office / JAR archive"),
+    (b"Rar!\x1a\x07", "RAR archive"),
+    (b"7z\xbc\xaf\x27\x1c", "7-Zip archive"),
+    (b"\x1f\x8b", "gzip stream"),
+    (b"BZh", "bzip2 stream"),
+    (b"ustar", "tar archive"),
+    (b"SQLite format 3\x00", "SQLite database (forensics)"),
+    (b"RIFF", "RIFF container (WAV/AVI - stego)"),
+    (b"OggS", "Ogg media (stego)"),
+    (b"ID3", "MP3 audio (stego)"),
+    (b"-----BEGIN ", "PEM key / certificate (crypto)"),
+    (b"SSH PRIVATE KEY", "OpenSSH private key (crypto)"),
+]
+
+# Per-port next-move suggestions. Defensive / enumeration only - no exploitation.
+CTF_SERVICE_PLAYBOOK: dict[int, list[str]] = {
+    21: [
+        "Try anonymous FTP: ftp <target>  (user: anonymous, blank password)",
+        "Download everything and check for writable directories",
+    ],
+    22: [
+        "Record the SSH banner/version, then: ktool cve-lookup <product version>",
+        "Only attempt credentials if the room/scope explicitly allows it",
+    ],
+    23: ["Grab the Telnet banner: nc <target> 23"],
+    25: ["SMTP banner: nc <target> 25", "VRFY/EXPN user enumeration if the scope allows"],
+    53: ["ktool dns <domain>", "Zone transfer attempt: dig axfr @<target> <domain>"],
+    69: ["TFTP is unauthenticated - try known filenames with tftp <target>"],
+    79: ["finger <target> for local usernames"],
+    110: ["POP3 banner: nc <target> 110"],
+    111: ["rpcinfo -p <target>", "showmount -e <target>"],
+    135: ["MSRPC: rpcdump.py <target>"],
+    139: ["smbclient -L //<target>/ -N", "enum4linux-ng <target>"],
+    143: ["IMAP banner: nc <target> 143"],
+    161: ["snmpwalk -v2c -c public <target>  (try community strings public/private)"],
+    389: ["ldapsearch -x -H ldap://<target> -b '' -s base namingContexts"],
+    443: ["ktool web https://<target> --yes-i-am-authorized", "Check the TLS cert for hostnames/emails"],
+    445: [
+        "smbclient -L //<target>/ -N   and   smbmap -H <target>",
+        "enum4linux-ng <target>; look for null-session shares",
+    ],
+    512: ["rexec / rlogin / rsh - legacy trust services, try rlogin -l root <target>"],
+    873: ["rsync --list-only rsync://<target>/"],
+    1433: ["MSSQL: check for weak 'sa' credentials only if scope allows"],
+    2049: ["showmount -e <target>; mount NFS exports read-only into a temp dir"],
+    3000: ["Often a dev web app - ktool web http://<target>:3000 --yes-i-am-authorized"],
+    3306: ["MySQL banner; test anonymous access with mysql -h <target>"],
+    3389: ["Record RDP version; connect with xfreerdp /v:<target>"],
+    5432: ["PostgreSQL: psql -h <target> -U postgres  (check default creds if allowed)"],
+    5900: ["VNC: vncviewer <target>  (some CTF boxes leave it passwordless)"],
+    6379: ["redis-cli -h <target>  then INFO / CONFIG GET dir  (unauth access is common)"],
+    8009: ["Apache AJP - review Ghostcat CVE-2020-1938: ktool cve-lookup CVE-2020-1938"],
+    8080: ["ktool web http://<target>:8080 --yes-i-am-authorized", "Check for Tomcat/Jenkins/manager pages"],
+    9200: ["Elasticsearch: curl http://<target>:9200/_cat/indices  (often unauthenticated)"],
+    11211: ["memcached stats: echo stats | nc <target> 11211"],
+    27017: ["MongoDB: mongosh --host <target>  (check for unauthenticated access)"],
+}
+
+CTF_GENERIC_PLAYBOOK: list[str] = [
+    "Full TCP sweep - CTF boxes hide services on high ports: nmap -p- -T4 <target>",
+    "Then version + default scripts on what is open: nmap -sVC -p <ports> <target>",
+    "If the web app redirects to a hostname, add it to /etc/hosts and re-test",
+    "Check every web root for robots.txt, /sitemap.xml, source comments, and backup files (.bak, ~, .old)",
+    "Keep notes and evidence in the workspace as you go: notes/ and evidence/",
+    "Turn every version string into a lookup: ktool cve-lookup / ktool vuln-lookup",
+    "Hunt for flags in everything you pull down: ktool ctf flag --path <dir>",
+]
+
+
+def _iter_ctf_files(root: Path, max_files: int, max_bytes: int) -> Iterable[Path]:
+    if root.is_file():
+        yield root
+        return
+    seen = 0
+    for path in sorted(root.rglob("*")):
+        if seen >= max_files:
+            break
+        if path.is_dir() or path.is_symlink():
+            continue
+        if any(part in {".git", "__pycache__", "node_modules"} for part in path.parts):
+            continue
+        try:
+            if path.stat().st_size > max_bytes:
+                continue
+        except OSError:
+            continue
+        seen += 1
+        yield path
+
+
+def _shannon_entropy(data: bytes) -> float:
+    if not data:
+        return 0.0
+    counts = [0] * 256
+    for byte in data:
+        counts[byte] += 1
+    total = len(data)
+    entropy = 0.0
+    for count in counts:
+        if count:
+            probability = count / total
+            entropy -= probability * math.log2(probability)
+    return round(entropy, 2)
+
+
+def _ascii_strings(data: bytes, minimum: int = 4) -> list[str]:
+    return re.findall(rb"[\x20-\x7e]{%d,}" % minimum, data)[:2000]
+
+
+def scan_bytes_for_flags(
+    data: bytes,
+    source: str,
+    patterns: dict[str, str],
+) -> list[dict[str, object]]:
+    text = data.decode("latin-1", errors="replace")
+    hits: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    for name, pattern in patterns.items():
+        for match in re.finditer(pattern, text):
+            value = match.group(0)
+            key = (source, value)
+            if key in seen:
+                continue
+            seen.add(key)
+            line = text.count("\n", 0, match.start()) + 1
+            start = max(match.start() - 40, 0)
+            context = text[start:match.end() + 40].replace("\n", " ")
+            hits.append(
+                {
+                    "pattern": name,
+                    "flag": value,
+                    "source": source,
+                    "line": line,
+                    "offset": match.start(),
+                    "context": context.strip(),
+                }
+            )
+    return hits
+
+
+def ctf_flag_hunt(
+    path: str | None,
+    url: str | None,
+    read_stdin: bool,
+    extra_patterns: list[str],
+    broad: bool,
+    max_files: int,
+    max_bytes: int,
+    authorized: bool,
+    timeout: float,
+) -> dict[str, object]:
+    patterns = {name: rx for name, rx in CTF_FLAG_PATTERNS.items() if broad or name != "uni"}
+    for index, raw in enumerate(extra_patterns or []):
+        try:
+            re.compile(raw)
+        except re.error as error:
+            raise ValueError(f"Invalid --pattern {raw!r}: {error}") from None
+        patterns[f"custom{index + 1}"] = raw
+
+    if not any([path, url, read_stdin]):
+        raise ValueError("Provide a target: a path, --url, or --stdin.")
+
+    print_section("CTF Flag Hunt")
+    hits: list[dict[str, object]] = []
+    scanned = 0
+
+    if read_stdin:
+        data = sys.stdin.buffer.read()
+        scanned += 1
+        hits.extend(scan_bytes_for_flags(data, "stdin", patterns))
+
+    if path:
+        root = Path(path).expanduser()
+        if not root.exists():
+            raise ValueError(f"Path not found: {root}")
+        for file_path in _iter_ctf_files(root, max_files, max_bytes):
+            try:
+                data = file_path.read_bytes()
+            except OSError:
+                continue
+            scanned += 1
+            hits.extend(scan_bytes_for_flags(data, str(file_path), patterns))
+
+    if url:
+        if not authorized:
+            raise ValueError("Scanning a live URL needs --yes-i-am-authorized.")
+        base = normalize_url(url)
+        candidates = [base] + [
+            urljoin(base + "/", suffix)
+            for suffix in ("robots.txt", "sitemap.xml", "flag", "flag.txt", ".git/config")
+        ]
+        for candidate in dict.fromkeys(candidates):
+            try:
+                _, _, body = http_request(candidate, method="GET", timeout=timeout)
+            except (ConnectionError, ValueError):
+                continue
+            scanned += 1
+            hits.extend(scan_bytes_for_flags(body, candidate, patterns))
+
+    for hit in hits:
+        print(f"{color('[FLAG]', '1;32')} {hit['flag']}  {color('<- ' + str(hit['source']), '90')}")
+    if not hits:
+        print("[i] No flag-format strings found. Try --broad or a custom --pattern.")
+    print(f"[i] Scanned {scanned} source(s); {len(hits)} candidate flag(s).")
+    return {"scanned": scanned, "patterns": sorted(patterns), "flags": hits}
+
+
+def ctf_triage(path: str, max_files: int, max_bytes: int) -> dict[str, object]:
+    root = Path(path).expanduser()
+    if not root.exists():
+        raise ValueError(f"Path not found: {root}")
+
+    have_file = shutil.which("file")
+    print_section("CTF Challenge Triage")
+    entries: list[dict[str, object]] = []
+
+    for file_path in _iter_ctf_files(root, max_files, max_bytes):
+        try:
+            data = file_path.read_bytes()
+        except OSError:
+            continue
+        head = data[:512]
+        magic = [label for signature, label in CTF_MAGIC_SIGNATURES if signature in head[: len(signature) + 8]]
+        embedded = sorted(
+            {
+                label
+                for signature, label in CTF_MAGIC_SIGNATURES
+                if signature in data[16:] and label not in magic
+            }
+        )
+        entropy = _shannon_entropy(data[: 256 * 1024])
+        strings = _ascii_strings(data)
+        interesting = sorted(
+            {
+                token.decode("latin-1")
+                for token in strings
+                if b"http" in token
+                or b"BEGIN" in token
+                or b"password" in token.lower()
+                or re.fullmatch(rb"[A-Za-z0-9+/]{24,}={0,2}", token)
+            }
+        )[:15]
+
+        hints: list[str] = []
+        tools: set[str] = set()
+        if entropy >= 7.5:
+            hints.append("high entropy - encrypted, compressed, or packed")
+            tools.update({"binwalk", "xxd", "ent"})
+        if embedded:
+            hints.append("data appended/embedded after the header")
+            tools.update({"binwalk", "foremost"})
+        if any("image" in label or "RIFF" in label or "MP3" in label or "Ogg" in label for label in magic):
+            hints.append("media file - classic stego carrier")
+            tools.update({"steghide", "zsteg", "exiftool", "stegsolve"})
+        if any("ELF" in label or "PE" in label or "Mach-O" in label for label in magic):
+            hints.append("compiled binary - reversing / pwn")
+            tools.update({"ghidra", "radare2", "gdb", "pwntools", "checksec"})
+        if any("archive" in label or "gzip" in label or "bzip2" in label or "tar" in label for label in magic):
+            hints.append("archive - extract and recurse")
+            tools.update({"7z", "unzip", "binwalk"})
+        if any("PEM" in label or "key" in label.lower() for label in magic) or "-----BEGIN" in "".join(interesting):
+            hints.append("key material - crypto challenge")
+            tools.update({"openssl", "RsaCtfTool", "CyberChef"})
+        file_output = ""
+        if have_file:
+            proc = run_external(["file", "-b", str(file_path)], timeout=10)
+            file_output = (proc.stdout or "").strip()
+
+        entry = {
+            "path": str(file_path),
+            "size": len(data),
+            "entropy": entropy,
+            "file": file_output,
+            "magic": magic or ["unknown / plain data"],
+            "embedded": embedded,
+            "interesting_strings": interesting,
+            "hints": hints or ["no strong signal - inspect strings and try `xxd | less`"],
+            "suggested_tools": sorted(tools) or ["strings", "xxd", "file"],
+        }
+        entries.append(entry)
+        print(f"\n{color(entry['path'], '1;36')}  ({entry['size']} bytes, entropy {entropy})")
+        print(f"  type   : {', '.join(entry['magic'])}" + (f"  |  file: {file_output}" if file_output else ""))
+        if embedded:
+            print(f"  embed  : {', '.join(embedded)}")
+        print(f"  hint   : {'; '.join(entry['hints'])}")
+        print(f"  tools  : {', '.join(entry['suggested_tools'])}")
+
+    if not entries:
+        print("[i] No files under the size limit were found to triage.")
+    return {"root": str(root), "files": len(entries), "entries": entries}
+
+
+def ctf_box_workflow(
+    target: str,
+    ports: str,
+    timeout: float,
+    output_dir: str | None,
+    run_flag_hunt: bool,
+) -> dict[str, object]:
+    target = validate_host(target)
+    slug = slugify_name(f"ctf-{target}")
+    paths = build_workflow_paths(
+        name=slug,
+        client="CTF / Lab",
+        target=target,
+        output_dir=output_dir,
+    )
+
+    result: dict[str, object] = {"target": target, "workspace": str(paths["base"])}
+
+    try:
+        result["dns"] = resolve_dns(target)
+    except ValueError as error:
+        result["dns"] = {"error": str(error)}
+
+    port_results = port_scanner(
+        target=target,
+        ports=parse_ports(ports),
+        timeout=0.8,
+        workers=64,
+        delay=0.0,
+    )
+    result["ports"] = [asdict(item) for item in port_results]
+    write_json_output(paths["scans"] / "ports.json", result["ports"])
+
+    web_url = infer_web_url(target, port_results)
+    result["web_url"] = web_url
+    if web_url:
+        try:
+            result["web"] = web_baseline(web_url, timeout=timeout, delay=0.1)
+            write_json_output(paths["scans"] / "web-baseline.json", result["web"])
+        except (ValueError, OSError, ConnectionError, TimeoutError) as error:
+            result["web"] = {"error": str(error)}
+
+    open_ports = [item.port for item in port_results]
+    playbook: list[dict[str, object]] = []
+    for port in open_ports:
+        moves = CTF_SERVICE_PLAYBOOK.get(port)
+        if not moves:
+            continue
+        playbook.append({"port": port, "moves": [move.replace("<target>", target) for move in moves]})
+    result["playbook"] = playbook
+    result["generic_playbook"] = [move.replace("<target>", target) for move in CTF_GENERIC_PLAYBOOK]
+
+    findings = normalize_recon_findings(target, result["ports"], "ctf-box")
+    if isinstance(result.get("web"), dict) and "error" not in result["web"]:
+        surface = result["web"].get("surface", {})
+        if isinstance(surface, dict) and isinstance(surface.get("findings"), list):
+            findings.extend(normalize_web_findings(web_url or target, surface["findings"], "ctf-box"))
+    result["findings"] = [asdict(item) for item in findings]
+
+    if run_flag_hunt and web_url:
+        try:
+            result["flag_hunt"] = ctf_flag_hunt(
+                path=None,
+                url=web_url,
+                read_stdin=False,
+                extra_patterns=[],
+                broad=False,
+                max_files=0,
+                max_bytes=0,
+                authorized=True,
+                timeout=timeout,
+            )
+        except ValueError as error:
+            result["flag_hunt"] = {"error": str(error)}
+
+    playbook_md = build_ctf_playbook_markdown(result)
+    (paths["notes"] / "ctf-playbook.md").write_text(playbook_md, encoding="utf-8")
+    artifacts = write_client_report_artifacts(
+        paths=paths,
+        report_slug="ctf-box",
+        title=f"CTF Box Notes - {target}",
+        asset=target,
+        findings=findings,
+    )
+    result["artifacts"] = {"playbook": str(paths["notes"] / "ctf-playbook.md"), **artifacts}
+
+    print_section("CTF Playbook")
+    if not playbook:
+        print("[i] No port-specific moves matched. Start with the generic playbook below.")
+    for step in playbook:
+        print(color(f"\n  port {step['port']}/tcp", "1;33"))
+        for move in step["moves"]:
+            print(f"    - {move}")
+    print(color("\n  always", "1;33"))
+    for move in result["generic_playbook"]:
+        print(f"    - {move}")
+    print(f"\n[+] Notes written to {paths['notes'] / 'ctf-playbook.md'}")
+    return result
+
+
+def build_ctf_playbook_markdown(result: dict[str, object]) -> str:
+    target = str(result.get("target", "unknown"))
+    ports = result.get("ports", [])
+    open_ports = ", ".join(f"{item['port']}/tcp" for item in ports) if isinstance(ports, list) and ports else "none detected"
+    lines = [
+        f"# CTF Playbook - {target}",
+        "",
+        f"- Workspace: {result.get('workspace', '')}",
+        f"- Generated UTC: {datetime.now(timezone.utc).isoformat()}",
+        f"- Web URL: {result.get('web_url') or 'not inferred'}",
+        f"- Open ports: {open_ports}",
+        "",
+        "## Per-service next moves",
+    ]
+    playbook = result.get("playbook", [])
+    if isinstance(playbook, list) and playbook:
+        for step in playbook:
+            lines.append(f"\n### port {step['port']}/tcp")
+            lines.extend(f"- {move}" for move in step["moves"])
+    else:
+        lines.append("\n- No port-specific moves matched; rely on the general checklist.")
+    lines.append("\n## Always")
+    lines.extend(f"- {move}" for move in result.get("generic_playbook", []))
+    flag_hunt = result.get("flag_hunt")
+    if isinstance(flag_hunt, dict) and flag_hunt.get("flags"):
+        lines.append("\n## Flag candidates")
+        lines.extend(f"- `{hit['flag']}` (from {hit['source']})" for hit in flag_hunt["flags"])
+    lines.append("")
+    return "\n".join(lines)
+
+
+def ctf_platform_fetch(
+    base_url: str,
+    token: str,
+    output_dir: str | None,
+    include_details: bool,
+    timeout: float,
+) -> dict[str, object]:
+    base = normalize_url(base_url)
+    token = token.strip()
+    if not token:
+        raise ValueError("A CTFd API token is required (--token or CTFD_TOKEN).")
+    headers = {"Authorization": f"Token {token}", "Content-Type": "application/json"}
+
+    print_section("CTFd Challenge Fetch")
+    status, _, body = http_request_with_headers(
+        urljoin(base + "/", "api/v1/challenges"), headers=headers, timeout=timeout
+    )
+    if status == 403:
+        raise ValueError("CTFd returned 403 - token invalid or challenges not visible yet.")
+    payload = json.loads(body.decode("utf-8", errors="replace") or "{}")
+    challenges = payload.get("data", []) if isinstance(payload, dict) else []
+
+    catalog: list[dict[str, object]] = []
+    for challenge in challenges:
+        if not isinstance(challenge, dict):
+            continue
+        record = {
+            "id": challenge.get("id"),
+            "name": challenge.get("name"),
+            "category": challenge.get("category"),
+            "value": challenge.get("value"),
+            "solved_by_me": challenge.get("solved_by_me"),
+        }
+        if include_details and record["id"] is not None:
+            try:
+                _, _, detail_body = http_request_with_headers(
+                    urljoin(base + "/", f"api/v1/challenges/{record['id']}"),
+                    headers=headers,
+                    timeout=timeout,
+                )
+                detail = json.loads(detail_body.decode("utf-8", errors="replace") or "{}")
+                data = detail.get("data", {}) if isinstance(detail, dict) else {}
+                record["description"] = data.get("description")
+                record["files"] = data.get("files", [])
+                record["connection_info"] = data.get("connection_info")
+            except (ConnectionError, ValueError, json.JSONDecodeError):
+                pass
+        catalog.append(record)
+
+    by_category: dict[str, list[dict[str, object]]] = {}
+    for record in catalog:
+        by_category.setdefault(str(record.get("category") or "uncategorized"), []).append(record)
+
+    result: dict[str, object] = {
+        "platform": base,
+        "challenge_count": len(catalog),
+        "categories": sorted(by_category),
+        "challenges": catalog,
+    }
+
+    if output_dir or catalog:
+        paths = build_workflow_paths(
+            name=slugify_name(f"ctf-{urlparse(base).netloc}"),
+            client="CTFd",
+            target=base,
+            output_dir=output_dir,
+        )
+        write_json_output(paths["scans"] / "ctfd-challenges.json", result)
+        md = ["# CTFd Challenges", "", f"- Platform: {base}", f"- Fetched UTC: {datetime.now(timezone.utc).isoformat()}", ""]
+        for category in sorted(by_category):
+            md.append(f"## {category}")
+            for record in sorted(by_category[category], key=lambda item: item.get("value") or 0):
+                mark = "x" if record.get("solved_by_me") else " "
+                md.append(f"- [{mark}] **{record['name']}** ({record['value']} pts) - id {record['id']}")
+                if record.get("connection_info"):
+                    md.append(f"  - connect: `{record['connection_info']}`")
+            md.append("")
+        (paths["notes"] / "challenges.md").write_text("\n".join(md), encoding="utf-8")
+        result["workspace"] = str(paths["base"])
+        print(f"[+] {len(catalog)} challenge(s) saved to {paths['notes'] / 'challenges.md'}")
+
+    for category in sorted(by_category):
+        print(color(f"\n  {category}", "1;33"))
+        for record in by_category[category]:
+            mark = color("solved", "1;32") if record.get("solved_by_me") else color("open", "90")
+            print(f"    [{mark}] {record['name']} ({record['value']} pts)")
+    return result
+
+
+def http_request_with_headers(
+    url: str, headers: dict[str, str], timeout: float
+) -> tuple[int, dict[str, str], bytes]:
+    merged = {"User-Agent": USER_AGENT, **headers}
+    request = Request(url, method="GET", headers=merged)
+    try:
+        with urlopen(request, timeout=timeout, context=ssl.create_default_context()) as response:
+            return response.status, dict(response.headers.items()), response.read(1024 * 512)
+    except HTTPError as error:
+        return error.code, dict(error.headers.items()), error.read(1024 * 512)
+    except URLError as error:
+        raise ConnectionError(str(getattr(error, "reason", error))) from error
+
+
+def ctf_dispatch(args: argparse.Namespace) -> dict[str, object]:
+    action = getattr(args, "ctf_command", None)
+    if action == "box":
+        require_authorization(args.yes_i_am_authorized)
+        return ctf_box_workflow(
+            target=args.target,
+            ports=args.ports,
+            timeout=args.timeout,
+            output_dir=args.output_dir,
+            run_flag_hunt=not args.no_flag_hunt,
+        )
+    if action == "flag":
+        return ctf_flag_hunt(
+            path=args.path or getattr(args, "path_opt", None),
+            url=args.url,
+            read_stdin=args.stdin,
+            extra_patterns=args.pattern,
+            broad=args.broad,
+            max_files=args.max_files,
+            max_bytes=args.max_bytes,
+            authorized=args.yes_i_am_authorized,
+            timeout=args.timeout,
+        )
+    if action == "triage":
+        return ctf_triage(path=args.path, max_files=args.max_files, max_bytes=args.max_bytes)
+    if action == "fetch":
+        token = args.token or os.environ.get("CTFD_TOKEN", "")
+        return ctf_platform_fetch(
+            base_url=args.url,
+            token=token,
+            output_dir=args.output_dir,
+            include_details=args.details,
+            timeout=args.timeout,
+        )
+    raise ValueError("Use: ktool ctf {box|flag|triage|fetch}. See ktool ctf --help.")
+
+
+def cli_command_names() -> list[str]:
+    parser = build_parser()
+    for action in parser._actions:
+        if getattr(action, "dest", None) == "command" and getattr(action, "choices", None):
+            return sorted(action.choices)
+    return []
+
+
+def generate_completion_script(shell: str) -> str:
+    commands = cli_command_names()
+    joined = " ".join(commands)
+    if shell == "bash":
+        return (
+            "# ktool bash completion - add to ~/.bashrc:\n"
+            "#   source <(ktool completion bash)\n"
+            "_ktool_completions() {\n"
+            '    local cur="${COMP_WORDS[COMP_CWORD]}"\n'
+            f'    local commands="{joined}"\n'
+            '    if [ "$COMP_CWORD" -eq 1 ]; then\n'
+            '        COMPREPLY=( $(compgen -W "$commands" -- "$cur") )\n'
+            "    else\n"
+            '        COMPREPLY=( $(compgen -f -- "$cur") )\n'
+            "    fi\n"
+            "}\n"
+            "complete -F _ktool_completions ktool tool.py\n"
+        )
+    return (
+        "#compdef ktool\n"
+        "# ktool zsh completion - add to a directory on $fpath, e.g.:\n"
+        "#   ktool completion zsh > ~/.zfunc/_ktool\n"
+        f"local -a commands=({joined})\n"
+        '_arguments "1: :{_describe \'command\' commands}" "*::arg:->args"\n'
+    )
+
+
 LEARN_TOPICS: dict[str, dict[str, object]] = {
+    "ctf": {
+        "title": "CTF and lab boxes",
+        "summary": (
+            "A capture-the-flag box is a machine you are explicitly allowed to attack in "
+            "order to find flag strings. The loop is: enumerate, research, get a foothold, "
+            "escalate, collect flags - and take notes the whole way."
+        ),
+        "points": [
+            "Enumerate first and hard: every open port and every web path is a lead.",
+            "'ktool ctf box <target>' runs recon and prints a per-service checklist.",
+            "'ktool ctf flag' scans files, a URL, or stdin for flag{...}/HTB{...}/THM{...}.",
+            "'ktool ctf triage <file>' identifies downloaded challenge files and suggests tools.",
+            "'ktool ctf fetch --url <ctfd>' pulls a jeopardy challenge list into a workspace.",
+            "Only attack boxes on a platform account you own or a range you were given.",
+        ],
+        "commands": ["ctf", "nmap", "web", "cve-lookup", "content-discovery"],
+        "reading": [
+            "TryHackMe - Learning Paths",
+            "HackTheBox Academy - Getting Started",
+            "picoCTF primer / CTF Field Guide",
+        ],
+    },
     "authorization": {
         "title": "Authorization and scope",
         "summary": (
@@ -8638,6 +9280,53 @@ def build_parser() -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
         help="Write JSON report to this path.",
     )
+
+    completion_parser = subparsers.add_parser(
+        "completion",
+        help="Print a shell completion script for ktool (bash or zsh).",
+    )
+    completion_parser.add_argument("shell", choices=["bash", "zsh"], help="Target shell.")
+    completion_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    ctf_parser = subparsers.add_parser(
+        "ctf",
+        help="CTF / lab helpers: guided box workflow, flag hunting, file triage, CTFd fetch.",
+    )
+    ctf_sub = ctf_parser.add_subparsers(dest="ctf_command")
+
+    ctf_box = ctf_sub.add_parser("box", help="Run a guided recon + enumeration playbook for one authorized box.")
+    add_common_run_options(ctf_box)
+    ctf_box.add_argument("target", help="Hostname or IP of the lab/CTF box.")
+    ctf_box.add_argument("--ports", default="common", help="Port list, range, or 'common'.")
+    ctf_box.add_argument("--timeout", type=float, default=6.0, help="Per-check network timeout in seconds.")
+    ctf_box.add_argument("--output-dir", help="Workspace directory (default engagements/ctf-<target>).")
+    ctf_box.add_argument("--no-flag-hunt", action="store_true", help="Skip the web flag sweep.")
+
+    ctf_flag = ctf_sub.add_parser("flag", help="Search files, a URL, or stdin for CTF flag formats.")
+    add_common_run_options(ctf_flag)
+    ctf_flag.add_argument("path", nargs="?", help="File or directory to scan.")
+    ctf_flag.add_argument("--path", dest="path_opt", help="File or directory to scan (same as the positional).")
+    ctf_flag.add_argument("--url", help="Fetch this URL (and a few common paths) and scan the response.")
+    ctf_flag.add_argument("--stdin", action="store_true", help="Read data from standard input.")
+    ctf_flag.add_argument("--pattern", action="append", default=[], help="Extra flag regex. Repeatable.")
+    ctf_flag.add_argument("--broad", action="store_true", help="Also match any word{...} token (noisier).")
+    ctf_flag.add_argument("--max-files", type=int, default=5000, help="Max files to read when scanning a directory.")
+    ctf_flag.add_argument("--max-bytes", type=int, default=5_000_000, help="Skip files larger than this many bytes.")
+    ctf_flag.add_argument("--timeout", type=float, default=6.0, help="URL fetch timeout in seconds.")
+
+    ctf_triage_parser = ctf_sub.add_parser("triage", help="Identify challenge files and suggest tools (offline).")
+    ctf_triage_parser.add_argument("path", help="Challenge file or directory.")
+    ctf_triage_parser.add_argument("--max-files", type=int, default=200, help="Max files to inspect.")
+    ctf_triage_parser.add_argument("--max-bytes", type=int, default=50_000_000, help="Skip files larger than this.")
+    ctf_triage_parser.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
+
+    ctf_fetch = ctf_sub.add_parser("fetch", help="Pull the challenge list from a CTFd instance into a workspace.")
+    ctf_fetch.add_argument("--url", required=True, help="CTFd base URL, e.g. https://ctf.example.com")
+    ctf_fetch.add_argument("--token", help="CTFd API token (or set CTFD_TOKEN).")
+    ctf_fetch.add_argument("--details", action="store_true", help="Also fetch each challenge's description and files.")
+    ctf_fetch.add_argument("--output-dir", help="Workspace directory.")
+    ctf_fetch.add_argument("--timeout", type=float, default=15.0, help="HTTP timeout in seconds.")
+    ctf_fetch.add_argument("--report", default=argparse.SUPPRESS, help="Write JSON report to this path.")
 
     tools_parser = subparsers.add_parser("tools", help="Check whether common Linux tools are installed.")
     tools_parser.add_argument(
@@ -9770,6 +10459,12 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "learn":
             results = learn_topics(args.topic)
+        elif args.command == "completion":
+            script = generate_completion_script(args.shell)
+            print(script)
+            results = {"shell": args.shell, "script": script}
+        elif args.command == "ctf":
+            results = ctf_dispatch(args)
         elif args.command == "tools":
             results = check_tools(args.category)
         elif args.command in {"recoon", "recon"}:
@@ -10230,6 +10925,8 @@ def main(argv: list[str] | None = None) -> int:
             results = vuln_lookup(args.query, timeout=args.timeout)
         elif args.command in {
             "learn",
+            "completion",
+            "ctf",
             "tools",
             "recoon",
             "recon",
